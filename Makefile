@@ -1,29 +1,53 @@
-.PHONY: install dev-install run test test-cov migrate migrate-new typecheck clean
+.PHONY: install dev-install run serve test test-postgres test-cov lint typecheck check eval bench docker migrate migrate-new clean
+
+PYTHON ?= python3
+PG_URL ?= postgresql+psycopg://mnemosyne:mnemosyne@127.0.0.1:5432/mnemosyne_test
 
 install:
-	pip install -e . --break-system-packages
+	$(PYTHON) -m pip install -e .
 
 dev-install:
-	pip install -e ".[dev]" --break-system-packages
+	$(PYTHON) -m pip install -e ".[dev,postgres]"
 
-run:
-	python3 -m mnemosyne.main
+run serve:
+	mnemosyne serve
 
 test:
-	pytest -v
+	$(PYTHON) -m pytest -q
+
+test-postgres:
+	MNEMOSYNE_TEST_POSTGRES_URL=$(PG_URL) $(PYTHON) -m pytest -q tests/integration/test_postgres.py
 
 test-cov:
-	pytest --cov=mnemosyne --cov-report=term-missing
+	$(PYTHON) -m pytest -q --cov=mnemosyne --cov-report=term-missing:skip-covered
 
-migrate:
-	alembic upgrade head
-
-migrate-new:
-	alembic revision --autogenerate -m "$(msg)"
+lint:
+	ruff check src tests benchmarks
 
 typecheck:
 	mypy src
 
+check: lint typecheck test
+
+eval:
+	mnemosyne eval
+	mnemosyne eval --heldout
+	mnemosyne eval --context 1500
+	mnemosyne eval --context 1500 --heldout
+
+bench:
+	$(PYTHON) benchmarks/scale.py 10000
+	$(PYTHON) benchmarks/hook_latency.py --runs 20
+
+docker:
+	docker build -t mnemosyne:latest .
+
+migrate:
+	mnemosyne db upgrade
+
+migrate-new:
+	alembic revision --autogenerate -m "$(msg)"
+
 clean:
-	find . -type d -name __pycache__ -exec rm -rf {} +
-	rm -rf .pytest_cache .mypy_cache htmlcov .coverage
+	find . -type d -name __pycache__ -prune -exec rm -rf {} +
+	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov .coverage build dist *.egg-info

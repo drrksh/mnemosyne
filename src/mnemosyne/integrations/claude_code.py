@@ -11,7 +11,7 @@ their own context:
   only when there are any.
 * **PreCompact / SessionEnd** — learn from the whole transcript in a
   *detached* background process, so the hook returns immediately
-  (Claude Code gives SessionEnd hooks about 1.5 seconds).
+  (SessionEnd runs while Claude Code is shutting down).
 
 Hook handlers never fail the developer's session: any error is logged to
 `<home>/logs/hooks.log` and the hook exits 0 with no output. Injected

@@ -6,13 +6,28 @@ how the first administrator and key of a team deployment are created.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import click
 
 from mnemosyne.cli.common import CliState, bold, dim, ok, pass_state, warn
+from mnemosyne.domain.principal import Permission, Principal
 
 SCOPE_CHOICES = {"read": "memories:read", "write": "memories:write", "admin": "admin"}
+
+
+def _actor() -> Principal:
+    """Administration from the command line acts with full rights (whoever
+    can run it here can read the database anyway) and is audited as the
+    operating-system account that ran it."""
+    import getpass
+
+    try:
+        account = getpass.getuser()
+    except Exception:  # no login name in some containers
+        account = str(os.getuid()) if hasattr(os, "getuid") else "unknown"
+    return Principal(user_id=f"cli:{account}"[:64], permissions=Permission.ALL)
 
 
 def _user_id(state: CliState, user: str) -> str:
@@ -44,11 +59,11 @@ def user() -> None:
 def user_create(state: CliState, handle: str, display_name: str, is_admin: bool, with_key: bool) -> None:
     """Create a user (and, by default, their first API key)."""
     identity = state.container.identity
-    created = identity.create_user(handle, display_name=display_name, is_admin=is_admin)
+    created = identity.create_user(handle, display_name=display_name, is_admin=is_admin, actor=_actor())
     click.echo(f"{ok('Created')} {created.handle} ({created.id}){' — administrator' if is_admin else ''}")
     if with_key:
         scopes = ["memories:read", "memories:write"] + (["admin"] if is_admin else [])
-        issued = identity.issue_api_key(created.id, name="initial", scopes=scopes)
+        issued = identity.issue_api_key(created.id, name="initial", scopes=scopes, actor=_actor())
         click.echo(f"API key (shown once): {bold(issued.plaintext)}")
 
 
@@ -65,7 +80,7 @@ def user_list(state: CliState) -> None:
 @pass_state
 def user_disable(state: CliState, user: str) -> None:
     """Disable a user: their keys stop working immediately."""
-    state.container.identity.set_user_disabled(_user_id(state, user), True)
+    state.container.identity.set_user_disabled(_user_id(state, user), True, actor=_actor())
     click.echo(f"Disabled {user}")
 
 
@@ -73,7 +88,7 @@ def user_disable(state: CliState, user: str) -> None:
 @click.argument("user")
 @pass_state
 def user_enable(state: CliState, user: str) -> None:
-    state.container.identity.set_user_disabled(_user_id(state, user), False)
+    state.container.identity.set_user_disabled(_user_id(state, user), False, actor=_actor())
     click.echo(f"Enabled {user}")
 
 
@@ -93,7 +108,7 @@ def key() -> None:
 def key_issue(state: CliState, user: str, name: str, scopes: tuple[str, ...], expires_in_days: Optional[int]) -> None:
     issued = state.container.identity.issue_api_key(
         _user_id(state, user), name=name, scopes=[SCOPE_CHOICES[s] for s in scopes] or None,
-        expires_in_days=expires_in_days,
+        expires_in_days=expires_in_days, actor=_actor(),
     )
     click.echo(f"{issued.key.id}  scopes {', '.join(issued.key.scopes)}")
     click.echo(f"API key (shown once): {bold(issued.plaintext)}")
@@ -117,7 +132,7 @@ def key_list(state: CliState, user: str) -> None:
 @click.argument("key_id")
 @pass_state
 def key_revoke(state: CliState, key_id: str) -> None:
-    revoked = state.container.identity.revoke_api_key(key_id)
+    revoked = state.container.identity.revoke_api_key(key_id, actor=_actor())
     click.echo(f"Revoked {key_id}" if revoked else warn(f"{key_id} was already revoked or does not exist"))
 
 
@@ -131,7 +146,7 @@ def team() -> None:
 @click.argument("name")
 @pass_state
 def team_create(state: CliState, name: str) -> None:
-    created = state.container.identity.create_team(name)
+    created = state.container.identity.create_team(name, actor=_actor())
     click.echo(f"{ok('Created')} team {created.name} ({created.id})")
 
 
@@ -155,7 +170,7 @@ def team_add(state: CliState, team_name: str, user: str, role: str) -> None:
 
     identity = state.container.identity
     team_obj = identity.get_team(team_name)
-    identity.add_member(team_obj.id, _user_id(state, user), TeamRole(role))
+    identity.add_member(team_obj.id, _user_id(state, user), TeamRole(role), actor=_actor())
     click.echo(f"Added {user} to {team_obj.name} as {role}")
 
 
@@ -166,7 +181,7 @@ def team_add(state: CliState, team_name: str, user: str, role: str) -> None:
 def team_remove(state: CliState, team_name: str, user: str) -> None:
     identity = state.container.identity
     team_obj = identity.get_team(team_name)
-    removed = identity.remove_member(team_obj.id, _user_id(state, user))
+    removed = identity.remove_member(team_obj.id, _user_id(state, user), actor=_actor())
     click.echo(f"Removed {user} from {team_obj.name}" if removed else warn(f"{user} was not a member"))
 
 

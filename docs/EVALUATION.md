@@ -44,12 +44,25 @@ Default configuration, zero-dependency `hashing` embedder:
 
 | Query set | Recall@5 | MRR | nDCG@5 | Leakage | p50 / p95 latency |
 |---|---|---|---|---|---|
-| In-sample (41) | 0.93 | 0.87 | 0.87 | **0.00** | 1.8 / 2.3 ms |
-| Held-out (15) | 0.83–0.90 | 0.78–0.81 | 0.78–0.82 | **0.00** | 1.6 / 2.7 ms |
+| In-sample (41) | 0.935 | 0.874 | 0.869 | **0.00** | 1.4 / 2.0 ms |
+| Held-out (15) | 0.900 | 0.806 | 0.817 | **0.00** | 2.0 / 3.1 ms |
 
-The held-out row is a range because configurations that are tied on the
-in-sample objective differ by about ±0.03 on 15 held-out queries; the
-range is the honest statement of that uncertainty.
+Results are deterministic: repeated runs give identical figures. That
+doesn't make 0.817 a precise estimate. Ranking configurations that tie
+on the in-sample objective differ by about ±0.03 nDCG on the 15 held-out
+queries, so read held-out quality as **0.78–0.82**.
+
+### Compiled context
+
+Recall is the ranked list. What the assistant actually receives is the
+compiled context (`evaluate_context`, `mnemosyne eval --context 1500`):
+the task-relevant layer plus the always-on profile, packed into a token
+budget.
+
+| 1,500-token budget | Essential (grade 3) present | Relevant (grade ≥ 2) present | Haystack noise | Leakage | Avg size |
+|---|---|---|---|---|---|
+| In-sample | **100%** | 98.8% | 0.2% | 0 | ~540 tokens |
+| Held-out | **93.3%** | 93.3% | 0% | 0 | ~540 tokens |
 
 ### What tuning did and did not achieve
 
@@ -69,8 +82,8 @@ Starting point (before any of the changes below): in-sample nDCG@5
    peak.
 
 In-sample nDCG@5 rose from 0.807 to 0.869. **Held-out nDCG@5 moved from
-0.784 to roughly 0.78–0.82 — most of the in-sample gain was fit to the
-in-sample queries.** That is reported here rather than hidden: the
+0.784 to 0.817 (0.78–0.82 across tied configurations), so most of the
+in-sample gain was fit to the in-sample queries.** That is reported here rather than hidden: the
 held-out number is the one to quote.
 
 ### Ablations (in-sample)
@@ -116,7 +129,27 @@ development container):
 | Memories | Write throughput | Index build | New-process load (snapshot) | Query p50 / p95 |
 |---|---|---|---|---|
 | 2,000 | ~890 / s | 179 ms | 71 ms | 6.6 / 8.6 ms |
-| 10,000 | ~830 / s | 1.9 s | 482 ms | 19.7 / 26.1 ms |
+| 10,000 | ~770 / s | 1.6 s | 212 ms | 20.0 / 25.4 ms |
+
+(The 10,000-memory row was re-measured after deterministic tie-breaking
+was added; the 2,000-memory row predates it.)
+
+### Editor hook latency
+
+`python benchmarks/hook_latency.py` runs the real `mnemosyne hook`
+command the way Claude Code does: a new process per event, with the JSON
+payload on stdin. It runs against the 101-memory persona:
+
+| Hook | Cold process p50 / p95 | Warm daemon p50 / p95 |
+|---|---|---|
+| `SessionStart` (profile) | 709 / 789 ms | 100 / 112 ms |
+| `UserPromptSubmit` (learn + relevant context) | 752 / 832 ms | 95 / 106 ms |
+
+Cold time is almost entirely Python start-up and imports; the work itself
+is tens of milliseconds. The benchmark fails if the daemon's output
+differs from the cold path's by a single byte. That check caught
+non-deterministic ordering of near-tied memories across processes, which
+was fixed by quantising recency and breaking ties on memory id.
 
 Warm queries reuse an in-process index validated by a cheap database
 signature (2–6 ms). Short-lived processes such as editor hooks load an
@@ -129,3 +162,7 @@ instantiate arbitrary objects.
 `tests/eval/test_retrieval_quality.py` runs both query sets on every test
 run and fails if in-sample nDCG@5 or MRR drops below 0.84, held-out below
 0.72, recall below 0.88, p95 latency above 50 ms, or leakage above zero.
+
+CI also runs `mnemosyne eval` on both query sets and the hook-latency
+benchmark (including its identical-output check) on every pull request
+(`.github/workflows/ci.yml`, job `quality`).

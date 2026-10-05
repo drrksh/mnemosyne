@@ -5,6 +5,10 @@ and what it costs. Written so a future maintainer (or a future phase's
 author) can tell *why* something looks the way it does before deciding
 whether to change it.
 
+Decisions 1–14 date from Phase 1 (a generic local memory engine).
+Decisions 15 onward record turning it into a developer-memory product.
+Where a later decision amends an earlier one, the earlier entry says so.
+
 ---
 
 ### 1. Database: SQLite + SQLAlchemy + Alembic, with an explicit PostgreSQL path
@@ -258,6 +262,9 @@ a contained, low-risk thing to swap later — every call site is just
 
 ### 11. Configuration strategy: env vars via `pydantic-settings`, resolved once at import time where needed
 
+> **Amended by decision 25:** configuration no longer comes from a `.env`
+> file in the working directory.
+
 **Problem:** "no magic numbers," every limit configurable, and FastAPI
 route/Pydantic field declarations need their constraint values (e.g.
 `max_length`) at class-definition time — before any request-scoped
@@ -366,3 +373,257 @@ full, connection drop) that would need fault-injection mocking to
 trigger — judged not worth contriving a fake failure just to paint a
 line green, versus the value of the 95% that's testing real behavior
 against a real database.
+
+---
+
+## Developer memory (decisions 15 onward)
+
+### 15. Specialise in how developers work, rather than general "memory"
+
+**Problem:** a general memory engine has no opinion about what matters.
+To make an assistant behave like it knows a developer, the system has to
+know what a convention, a tool choice, a decision and a lesson look like,
+and where each applies.
+
+**Chosen:** a developer vocabulary. The memory types are `convention`,
+`pattern`, `anti_pattern`, `tooling`, `skill`, `decision`, `procedure`
+and `failure`. On top of them sit scopes (`global`, `lang:x`, `repo:id`),
+slots for settings that hold exactly one value (`python.formatter`), and
+a curated tool and concept vocabulary (`core/vocabulary.py`) shared by
+the extractors and the ranker.
+
+**Trade-off:** the vocabulary needs maintenance as ecosystems change, and
+knowledge it doesn't cover falls back to free text, which supersedes
+nothing and is retrieved only by similarity.
+
+### 16. Origin authority, and merging instead of appending
+
+**Problem:** the same knowledge arrives many times from many sources, and
+sources disagree. An append-only store gets noisier the more it learns.
+
+**Chosen:**
+- Every incoming observation goes through one pure `Consolidator` that
+  reinforces, supersedes, keeps the existing memory, or creates a new
+  one (ARCHITECTURE.md, "Learning").
+- Authority is fixed: `explicit` > `conversation` > `imported` >
+  `inferred` = `system`. Lower authority never overwrites higher.
+- Belief changes (reinforcement, feedback, access) don't create
+  versions. Versions record edits.
+
+**Why:** what the developer said must beat what was guessed, and saying it
+again should strengthen a memory, not duplicate it. Keeping "how
+strongly we believe this" apart from "what this says" keeps version
+history readable.
+
+**Trade-off:** a correct inference can't displace a stale explicit
+statement on its own. It is kept as counter-evidence until the developer
+confirms or corrects (`feedback`).
+
+### 17. Evidence is first-class, and idempotent
+
+**Chosen:** every memory carries evidence rows with a stable `source_ref`
+(commit SHA plus analyzer plus key, session id plus sentence hash, and so
+on), unique per memory.
+
+**Why:** "why does it think that?" must always have an answer. Idempotent
+references also make every extractor safe to re-run: hooks fire twice
+(`PreCompact`, then `SessionEnd`), backfills overlap, imports repeat.
+
+**Trade-off:** an evidence table that grows with use. It's capped per
+memory (`MNEMOSYNE_EVIDENCE_CAP_PER_MEMORY`).
+
+### 18. Hybrid retrieval, with a zero-dependency embedder by default
+
+**Problem:** good retrieval usually means a neural embedding model, which
+means a large dependency, a GPU or a paid API, and sending code knowledge
+off the machine.
+
+**Chosen:** retrieval combines BM25F over memory fields, signed feature
+hashing (a deterministic, offline "embedder"), and a developer-concept
+layer, blended with importance, confidence, recency, scope and
+reinforcement. Neural embedders plug in (`http` for any OpenAI-compatible
+endpoint, or `sentence-transformers`). Quality is measured on a labeled
+persona, with held-out queries written *before* tuning (docs/EVALUATION.md).
+
+**Why:** developer memories are short and full of exact identifiers (tool
+names, flags, file conventions), where lexical signals are strong. The
+concept layer gives the "write tests" → testing-conventions association
+that matters most. Measured: in-sample nDCG@5 0.87, held-out 0.82, zero
+cross-repository leakage.
+
+**Trade-off:** open-domain synonymy ("refund" → "money handling") is weak
+without a neural embedder. The neural options are implemented but have
+not been measured on the persona.
+
+### 19. Deterministic ranking
+
+**Problem:** the hook-latency benchmark showed the same profile rendering
+in different orders in two processes. Memories with equal scores were
+ordered by load order and by seconds of recency jitter.
+
+**Chosen:** recency is quantised to 0.001 (it's a day-scale signal), and
+exact ties break on memory id (`RetrievalIndex.id_rank`).
+
+**Why:** the same inputs must give the same context. Users notice when it
+doesn't, and assistants' prompt caches only hit on byte-identical
+prefixes.
+
+**Trade-off:** none measurable. Retrieval metrics are unchanged.
+
+### 20. Two-layer context: relevant first, profile second
+
+**Chosen:** the compiled context has two layers. A task-relevant layer is
+kept to the strong part of the ranking (within 40% of the best match,
+and strongly relevant or important). An always-on profile layer holds
+rules, conventions, tooling and repository commands for the working
+context. Both share one token budget (profile share 45%, unused budget
+flows across).
+
+**Why:** some knowledge applies to every task in a repository ("named
+exports only"), yet is *about* no particular task, so recall ranks it
+low. Other knowledge matters only when relevant. Injecting the weak tail
+of a ranking costs the model attention. Measured: 100% of essential
+memories in-sample, 93% held-out, at 1,500 tokens.
+
+### 21. Conversation learning is precision-first, and only hears the developer
+
+**Chosen:**
+- Heuristics extract only standing statements from **user** turns, and
+  reject task-scoped phrasing.
+- Assistant turns, tool output and injected context are never mined.
+- The optional LLM extractor must ground each finding in a verbatim user
+  quote.
+
+**Why:** a wrong memory is worse than a missing one, because it is
+repeated in every future session. Mining only what the developer typed
+also closes the main prompt-injection path: a web page or file an
+assistant reads can't become a memory.
+
+**Trade-off:** recall of implicit preferences is limited without the LLM
+extractor.
+
+### 22. Repository analysis is statistical, local, and never executes code
+
+**Chosen:**
+- Analyzers count, and a convention needs enough samples and a majority.
+- Confidence is the Wilson lower bound of the observed proportion.
+- Personal habits (commit style) come only from the developer's own
+  commits.
+- Python is parsed with `ast`; nothing in the repository is run.
+- In team mode, analysis still happens on the developer's machine and
+  only findings are sent.
+
+**Why:** "88% of functions are annotated" is evidence; one file is not.
+Running repository code (build scripts, test discovery) would turn
+"learn this repo" into "execute this repo".
+
+### 23. Local-first, with an optional team server behind the same interface
+
+**Chosen:** one `Backend` interface with two implementations.
+`LocalBackend` uses an in-process container on SQLite. `RemoteBackend`
+calls the REST API with an API key. Every surface uses the interface,
+and both implementations pass the same tests.
+
+**Why:** a single developer should get value with zero infrastructure,
+while a company needs shared team knowledge, central administration and
+audit. Keeping one interface means features don't fork.
+
+**Trade-off:** some operations need a server endpoint before they work
+remotely (for example `/rules` for `sync`, `/me/stats` for `status`).
+
+### 24. Tenancy in the query, and 404 for invisible
+
+**Chosen:** a caller's `Visibility` becomes a SQL `WHERE` clause in the
+repository layer. Invisible memories raise `NotFoundError`.
+
+**Why:** filtering after loading is one forgotten check away from a leak.
+Returning 403 would confirm that a memory exists.
+
+### 25. Configuration never comes from the working directory
+
+> Amends decision 11.
+
+**Problem:** hooks and the MCP server run inside whatever repository is
+open. If a `.env` in the current directory were read, cloning a
+malicious repository could set `MNEMOSYNE_SERVER_URL` and send the
+developer's memory and prompts elsewhere.
+
+**Chosen:** settings come only from environment variables,
+`<home>/config.env`, and a file explicitly named by
+`MNEMOSYNE_CONFIG_FILE`. A regression test plants a hostile `.env`.
+
+**Trade-off:** the `.env` convenience is gone for local development of
+the server. Use `MNEMOSYNE_CONFIG_FILE=.env`.
+
+### 26. Hooks never fail, and do slow work out of band
+
+**Chosen:**
+- Every hook handler is wrapped: any error is logged and the hook exits
+  0 with no output.
+- Transcript learning runs in a detached process.
+- Injected context is capped below Claude Code's 10,000-character limit,
+  and wrapped in `<mnemosyne-context>` so it is never re-learned.
+
+**Why:** a memory tool that breaks or slows the editor gets uninstalled.
+`SessionEnd` hooks run while Claude Code is shutting down, so they must
+return at once.
+
+### 27. A per-user hook daemon on a Unix socket
+
+**Problem:** Claude Code starts a process per hook, and `UserPromptSubmit`
+runs before every prompt. Profiling showed about 0.7 s per hook, almost
+all of it imports. The work itself was about 50 ms.
+
+**Options:** (a) trim imports, which saves perhaps 30%; (b) a long-running
+local HTTP server on a TCP port; (c) a per-user daemon on a Unix socket,
+started on demand.
+
+**Chosen:** (c).
+- The first hook answers in-process and starts the daemon. Later hooks
+  hand the event over using only the standard library.
+- The filesystem is the access control: the socket is `0600` in a
+  `0700` directory, and the client refuses sockets it does not own.
+- The daemon is disposable: one per home (`flock`), and it exits when
+  idle, on config change, or on upgrade.
+- Any failure falls back to in-process handling.
+
+**Why:** p50 went from ~730 ms to ~100 ms with identical output. A TCP
+port would be reachable by every local user and process, and need its
+own authentication.
+
+**Trade-off:** POSIX only. On Windows hooks work, without the speed-up.
+
+### 28. Rule files carry repository knowledge, not personal preferences
+
+**Chosen:** `mnemosyne sync` writes only repository- and team-scoped
+memories by default, inside a marked block it owns (or a file it owns,
+for Cursor).
+
+**Why:** `CLAUDE.md` and `AGENTS.md` are usually committed. One
+developer's "keep answers terse" shouldn't become a teammate's
+instruction. Personal context flows through hooks and MCP instead.
+
+### 29. API keys: random secrets, SHA-256, prefix lookup
+
+**Chosen:** keys look like `mn_<12-hex prefix>_<32-byte URL-safe
+secret>`. They are stored as SHA-256 and looked up by prefix, with a
+constant-time comparison. An unknown prefix is compared against a dummy
+hash.
+
+**Why:** password hashing (bcrypt, argon2) exists to slow guessing of
+low-entropy secrets. These secrets have 256 bits of entropy, so a fast
+hash is sufficient, and it keeps authentication off the latency budget.
+
+### 30. Migrations ship in the package, and the head revision is pinned
+
+**Chosen:**
+- Alembic scripts live in `mnemosyne/migrations` and run
+  programmatically (`db/migrate.py`).
+- The head revision is pinned in `migrate.HEAD_REVISION`, so the schema
+  check at process start doesn't import Alembic.
+- Tests check the pin against the files, and the migrated schema against
+  the ORM models, on SQLite and PostgreSQL.
+
+**Why:** `pip install` must yield a working `mnemosyne db upgrade` with
+no checkout. Every hook process checks the schema, so the check must be
+cheap.

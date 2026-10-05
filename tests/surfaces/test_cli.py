@@ -164,6 +164,21 @@ def test_admin_users_keys_teams(run):
     assert "no user with id or handle" in result.output
 
 
+def test_admin_actions_are_audited(run, _isolated_home):
+    import getpass
+
+    from mnemosyne.config import load_settings
+    from mnemosyne.container import Mnemosyne
+
+    run("admin", "user", "create", "carol")
+    run("admin", "team", "create", "infra")
+    run("admin", "team", "add", "infra", "carol")
+    with Mnemosyne(load_settings()) as container, container.uow_factory() as uow:
+        events = uow.audit.list(limit=20)
+    assert {e.action for e in events} >= {"user.create", "api_key.issue", "team.create", "team.add_member"}
+    assert {e.actor_id for e in events} == {f"cli:{getpass.getuser()}"}
+
+
 def test_db_commands(run):
     assert "->" in run("db", "upgrade").output
     assert "Already at" in run("db", "upgrade").output
