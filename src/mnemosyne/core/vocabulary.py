@@ -346,57 +346,66 @@ TOOLS: tuple[Tool, ...] = (
 #: retrieval connect text that shares meaning but not vocabulary.
 CONCEPT_TRIGGERS: dict[str, tuple[str, ...]] = {
     "testing": ("test", "tests", "testing", "spec", "specs", "tdd", "fixture", "fixtures", "mock", "mocks",
-                "mocking", "stub", "assert", "assertion", "coverage", "unit", "integration", "e2e",
-                "conftest", "parametrize", "snapshot"),
+                "mocking", "stub", "assert", "assertion", "coverage", "unit test", "unit tests", "integration test",
+                "integration tests", "e2e", "end-to-end",
+                "conftest", "parametrize", "snapshot", "flaky", "regression", "testcase"),
     "formatting": ("format", "formatting", "formatter", "indent", "indentation", "whitespace", "quote", "quotes",
                    "semicolon", "semicolons", "line-length", "wrap", "tabs", "spaces", "trailing", "comma"),
-    "linting": ("lint", "linter", "linting", "warning", "warnings", "rule", "rules", "static", "analysis"),
-    "style": ("style", "convention", "conventions", "idiom", "idiomatic", "readable", "readability", "clean"),
-    "typing": ("type", "types", "typing", "typed", "annotation", "annotations", "hint", "hints", "generic",
-               "generics", "strict", "interface", "interfaces", "any"),
-    "packaging": ("package", "packages", "dependency", "dependencies", "install", "lockfile", "lock", "version",
-                  "versions", "virtualenv", "venv", "registry", "publish", "monorepo", "workspace"),
+    "linting": ("lint", "linter", "linting", "warning", "warnings", "static", "analysis"),
+    "style": ("style", "convention", "conventions", "idiom", "idiomatic", "readable", "readability"),
+    "typing": ("type", "types", "typing", "typed", "annotation", "annotations", "annotated", "hint", "hints",
+               "generic", "generics", "strict", "interface", "interfaces", "any", "unknown"),
+    "packaging": ("package", "packages", "dependency", "dependencies", "install", "installs", "lockfile",
+                  "virtualenv", "venv", "registry", "publish", "monorepo", "workspace"),
     "database": ("database", "db", "sql", "query", "queries", "schema", "migration", "migrations", "table",
-                 "tables", "index", "transaction", "transactions", "orm", "model", "models", "persistence",
-                 "repository", "nosql"),
-    "git": ("git", "commit", "commits", "branch", "branches", "merge", "rebase", "pr", "pull", "push",
-            "squash", "changelog", "tag"),
+                 "tables", "transaction", "transactions", "orm", "persistence", "nosql", "column", "columns"),
+    "git": ("git", "commit", "commits", "branch", "branches", "merge", "rebase", "pr", "pull", "push", "squash",
+            "changelog", "tag", "diverged", "upstream", "force-push", "history", "cherry-pick"),
     "cicd": ("ci", "cd", "pipeline", "pipelines", "deploy", "deployment", "release", "releases", "workflow",
-             "workflows", "build", "artifact"),
-    "infrastructure": ("infra", "infrastructure", "container", "containers", "cluster", "server", "servers",
-                       "cloud", "hosting", "provision", "environment", "staging", "production"),
-    "errors": ("error", "errors", "exception", "exceptions", "raise", "throw", "catch", "try", "failure",
-               "fail", "bug", "bugs", "crash", "traceback", "panic", "retry", "fallback", "handling"),
+             "workflows", "artifact"),
+    "infrastructure": ("infra", "infrastructure", "container", "containers", "cluster", "cloud", "hosting",
+                       "provision", "staging", "production"),
+    "errors": ("error", "errors", "exception", "exceptions", "raise", "throw", "catch", "failure", "fail",
+               "bug", "bugs", "crash", "traceback", "panic", "retry", "retries", "fallback", "timeout", "timeouts"),
     "logging": ("log", "logs", "logging", "logger", "print", "trace", "tracing", "metric", "metrics",
-                "monitoring", "observability", "telemetry", "debug"),
+                "monitoring", "observability", "telemetry"),
     "web": ("api", "apis", "rest", "http", "endpoint", "endpoints", "route", "routes", "router", "request",
-            "requests", "response", "graphql", "grpc", "webhook", "middleware", "server"),
+            "requests", "response", "responses", "graphql", "grpc", "webhook", "webhooks", "middleware"),
     "concurrency": ("async", "await", "asyncio", "thread", "threads", "threading", "concurrency", "concurrent",
-                    "parallel", "promise", "promises", "goroutine", "goroutines", "lock", "race", "queue",
-                    "worker", "workers"),
+                    "parallel", "promise", "promises", "goroutine", "goroutines", "race", "worker", "workers"),
     "frontend": ("frontend", "ui", "ux", "component", "components", "jsx", "tsx", "css", "html", "dom",
-                 "browser", "render", "rendering", "hook", "hooks", "props", "state", "page", "pages"),
-    "styling": ("css", "styles", "styling", "theme", "theming", "design", "layout", "responsive"),
-    "security": ("security", "secure", "auth", "authentication", "authorization", "token", "tokens", "secret",
+                 "browser", "render", "rendering", "hook", "hooks", "props", "page", "pages", "hydration"),
+    "styling": ("css", "styles", "styling", "theme", "theming", "layout", "responsive"),
+    "security": ("api key", "access token", "secret key", "private key", "security", "secure", "auth",
+                 "authentication", "authorization", "token", "tokens", "secret",
                  "secrets", "password", "passwords", "encrypt", "encryption", "permission", "permissions",
-                 "vulnerability", "xss", "csrf", "injection", "sanitize"),
+                 "vulnerability", "xss", "csrf", "injection", "sanitize", "credential", "credentials", "api-key",
+                 "apikey", "admin", "admins", "role", "roles", "rbac", "oauth", "jwt"),
     "performance": ("performance", "perf", "fast", "slow", "latency", "optimize", "optimization", "cache",
-                    "caching", "memory", "profiling", "profile", "benchmark", "throughput", "efficient"),
+                    "caching", "profiling", "benchmark", "throughput", "efficient", "n+1"),
     "documentation": ("doc", "docs", "docstring", "docstrings", "documentation", "readme", "comment",
-                      "comments", "jsdoc", "explain", "explanation"),
-    "naming": ("name", "names", "naming", "camelcase", "snake_case", "pascalcase", "kebab-case", "identifier",
-               "identifiers", "variable", "variables", "prefix", "suffix"),
-    "architecture": ("architecture", "design", "layer", "layers", "layered", "pattern", "patterns", "module",
-                     "modules", "structure", "monolith", "microservice", "microservices", "service",
-                     "services", "domain", "hexagonal", "clean", "dependency-injection", "coupling"),
+                      "comments", "jsdoc"),
+    "naming": ("name", "names", "naming", "rename", "camelcase", "snake_case", "pascalcase", "kebab-case",
+               "identifier", "identifiers", "variable", "variables"),
+    "architecture": ("architecture", "layer", "layers", "layered", "monolith", "microservice", "microservices",
+                     "hexagonal", "dependency-injection", "coupling", "business"),
     "validation": ("validate", "validation", "validator", "schema", "parse", "parsing", "sanitize"),
     "build": ("build", "bundle", "bundler", "compile", "compiler", "transpile", "minify"),
-    "data": ("data", "dataframe", "dataset", "ml", "model", "training", "tensor", "array", "analytics"),
-    "cli": ("cli", "command", "commands", "terminal", "shell", "flag", "flags", "argv"),
-    "communication": ("answer", "answers", "explain", "explanation", "verbose", "terse", "concise", "brief",
-                      "tone", "emoji", "emojis", "summary", "detail", "details"),
-    "review": ("review", "reviews", "reviewer", "feedback", "approve", "approval", "nit", "nits"),
+    "data": ("data", "dataframe", "dataset", "ml", "training", "tensor", "array", "analytics"),
+    "cli": ("cli", "command", "commands", "subcommand", "subcommands", "terminal", "shell", "flag", "flags", "argv"),
+    "communication": ("answer", "answers", "explain", "explanation", "explanations", "verbose", "terse",
+                      "concise", "brief", "tone", "emoji", "emojis"),
+    "review": ("review", "reviews", "reviewer", "reviewing", "approve", "approval", "nit", "nits"),
     "editor": ("editor", "ide", "keybinding", "keybindings", "plugin", "plugins"),
+    "datetime": ("time", "timestamp", "timestamps", "date", "dates", "datetime", "datetimes", "timezone",
+                 "timezones", "utc", "tz", "clock", "duration", "calendar", "iso8601", "epoch"),
+    "decision": ("should", "choose", "choice", "option", "options", "alternative", "alternatives", "tradeoff",
+                 "tradeoffs", "trade-off", "trade-offs", "pros", "cons", "versus", "vs", "compare", "comparison",
+                 "decide", "decided", "decision", "recommend", "recommendation"),
+    "i18n": ("translate", "translation", "translations", "translated", "i18n", "l10n", "locale", "locales",
+             "localization", "localize", "internationalization", "intl"),
+    "money": ("money", "monetary", "currency", "currencies", "amount", "amounts", "price", "prices", "pricing",
+              "payment", "payments", "refund", "refunds", "charge", "charges", "cents"),
 }
 
 
@@ -423,14 +432,21 @@ def _build_concept_index() -> dict[str, frozenset[str]]:
     index: dict[str, set[str]] = {}
     for concept, words in CONCEPT_TRIGGERS.items():
         for word in words:
-            for token in tokenize(word, drop_directives=False) or [stem(word.lower())]:
+            if " " in word:
+                # Phrase trigger: indexed as a bigram of stemmed tokens.
+                parts = tokenize(word, drop_directives=False, keep_stopwords=True)
+                index.setdefault("_".join(parts), set()).add(concept)
+                continue
+            # Only the word's own (first) token: "line-length" names the
+            # concept as a whole; its parts ("line") are too generic.
+            for token in tokenize(word, drop_directives=False, keep_stopwords=True)[:1] or [stem(word.lower())]:
                 index.setdefault(token, set()).add(concept)
     for tool in TOOLS:
         concepts = set(CATEGORY_CONCEPTS.get(tool.category, ())) | set(tool.extra_concepts)
         if not concepts:
             continue
         for alias in tool.aliases:
-            for token in tokenize(alias, drop_directives=False)[:1]:
+            for token in tokenize(alias, drop_directives=False, keep_stopwords=True)[:1]:
                 index.setdefault(token, set()).update(concepts)
     return {token: frozenset(concepts) for token, concepts in index.items()}
 
@@ -454,12 +470,64 @@ def concepts_for_token(token: str) -> frozenset[str]:
     return CONCEPT_INDEX.get(token, frozenset())
 
 
+#: Concepts that name an *activity* — the kind of work being done. They
+#: decide which conventions apply ("write tests" -> testing conventions),
+#: so they weigh more than *domain* concepts describing the object of the
+#: work ("...for the refund service" -> money).
+ACTIVITY_CONCEPTS: frozenset[str] = frozenset(
+    {
+        "testing", "formatting", "linting", "style", "typing", "packaging", "git", "cicd", "errors", "logging",
+        "documentation", "naming", "review", "i18n", "security", "performance", "validation", "build",
+        "decision", "communication",
+    }
+)
+DOMAIN_CONCEPT_WEIGHT = 0.5
+
+
+def concept_weight(concept: str) -> float:
+    return 1.0 if concept in ACTIVITY_CONCEPTS else DOMAIN_CONCEPT_WEIGHT
+
+
+def concepts_for_text(text: str) -> list[str]:
+    """Concepts evoked by free text. Function words are kept ("should we
+    ...", "X versus Y") and identifiers are not split (`payments-api`
+    names a project, not the money concept)."""
+    return concepts_for_tokens(tokenize(text, drop_directives=False, keep_stopwords=True, split_identifiers=False))
+
+
 def concepts_for_tokens(tokens: Iterable[str]) -> list[str]:
     seen: dict[str, None] = {}
+    previous: Optional[str] = None
     for token in tokens:
         for concept in concepts_for_token(token):
             seen.setdefault(concept, None)
+        if previous is not None:
+            for concept in concepts_for_token(f"{previous}_{token}"):
+                seen.setdefault(concept, None)
+        previous = token
     return list(seen)
+
+
+def vocabulary_fingerprint() -> str:
+    """Changes whenever anything that shapes tokenization or concepts
+    changes. Embedders built on this vocabulary fold it into their
+    model id, so stored vectors are recomputed instead of silently
+    mixing two feature spaces."""
+    import hashlib
+
+    from mnemosyne.core import text as text_module
+
+    material = repr(
+        (
+            sorted((k, v) for k, v in CONCEPT_TRIGGERS.items()),
+            sorted((t.name, t.category, t.aliases) for t in TOOLS),
+            sorted(text_module.LEMMAS.items()),
+            sorted(text_module.STOPWORDS),
+            sorted(text_module.DIRECTIVE_WORDS),
+            [text_module.stem(w) for w in ("translated", "services", "queries", "matches", "caching")],
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
 
 
 #: Aliases that are also ordinary English (or very common) words. Free

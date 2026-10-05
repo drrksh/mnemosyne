@@ -1,12 +1,16 @@
 """
 Hybrid ranking.
 
-    relevance = s · semantic + (1 − s) · lexical            (s = semantic share)
+    relevance = (1 − c) · [s · semantic + (1 − s) · lexical] + c · concept
+                (s = semantic share, c = concept share)
     score     = Σ wᵢ · componentᵢ / Σ wᵢ
     components: relevance, importance, confidence, recency, scope, reinforcement
 
 * **semantic** — cosine similarity of query and memory embeddings.
 * **lexical** — BM25F, normalized to an absolute [0, 1] scale.
+* **concept** — IDF-weighted share of the query's developer concepts
+  (testing, deployment, money, i18n...) the memory covers: the *kind of
+  task* signal that connects "write unit tests" to "uses pytest".
 * **importance / confidence** — stored on the memory, adjusted by
   learning and feedback.
 * **recency** — exponential decay (half-life configurable) since the
@@ -42,13 +46,14 @@ _REINFORCEMENT_SATURATION = math.log1p(9.0)
 
 @dataclass(frozen=True)
 class RankingWeights:
-    relevance: float = 0.55
+    relevance: float = 0.7
     importance: float = 0.12
     confidence: float = 0.08
     recency: float = 0.07
     scope: float = 0.13
     reinforcement: float = 0.05
     semantic_share: float = 0.5
+    concept_share: float = 0.1
     min_relevance: float = 0.06
     recency_half_life_days: float = 90.0
     mmr_lambda: float = 0.8
@@ -63,6 +68,7 @@ class RankingWeights:
             scope=settings.weight_scope,
             reinforcement=settings.weight_reinforcement,
             semantic_share=settings.semantic_share,
+            concept_share=settings.concept_share,
             min_relevance=settings.min_relevance,
             recency_half_life_days=settings.recency_half_life_days,
             mmr_lambda=settings.mmr_lambda,
@@ -73,6 +79,7 @@ class RankingWeights:
 class ScoreBreakdown:
     semantic: float
     lexical: float
+    concept: float
     relevance: float
     importance: float
     confidence: float
@@ -125,10 +132,16 @@ class HybridRanker:
             semantic = index.semantic_scores(query_vector)
             share = np.where(index.has_vector, w.semantic_share, 0.0).astype(np.float32)
             relevance = share * semantic + (1.0 - share) * lexical
+            concept_values = index.concept_scores(query or "")
+            if concept_values is not None:
+                concept = concept_values
+                relevance = (1.0 - w.concept_share) * relevance + w.concept_share * concept
+            else:
+                concept = np.zeros(n, dtype=np.float32)
             if require_relevance:
                 eligible &= relevance >= w.min_relevance
         else:
-            lexical = semantic = relevance = np.zeros(n, dtype=np.float32)
+            lexical = semantic = concept = relevance = np.zeros(n, dtype=np.float32)
 
         if not eligible.any():
             return []
@@ -163,6 +176,7 @@ class HybridRanker:
                 breakdown=ScoreBreakdown(
                     semantic=float(semantic[i]),
                     lexical=float(lexical[i]),
+                    concept=float(concept[i]),
                     relevance=float(relevance[i]),
                     importance=float(importance[i]),
                     confidence=float(confidence[i]),

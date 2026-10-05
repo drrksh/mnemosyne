@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mnemosyne.core.text import short_hash, tokenize
-from mnemosyne.core.vocabulary import concepts_for_tokens
+from mnemosyne.core.vocabulary import concepts_for_text
 from mnemosyne.domain.entities import Memory
 
 #: Content beyond this many characters adds little to ranking and a lot
@@ -66,12 +66,22 @@ def memory_fields(memory: Memory) -> IndexedFields:
     slot = tokenize(slot_text(memory))
     summary = tokenize(memory.summary)
     content = tokenize(memory.content[:MAX_INDEXED_CONTENT_CHARS])
-    concepts = [CONCEPT_PREFIX + c for c in concepts_for_tokens([*title, *tags, *slot, *summary, *content])]
+    concepts = [CONCEPT_PREFIX + c for c in memory_concepts(memory)]
     return IndexedFields(title, tags, slot, summary, content, concepts)
 
 
+def memory_concepts(memory: Memory) -> list[str]:
+    text = " ".join(
+        [memory.title, " ".join(memory.tags), slot_text(memory), memory.summary,
+         memory.content[:MAX_INDEXED_CONTENT_CHARS]]
+    )
+    return concepts_for_text(text)
+
+
 def embedding_text(memory: Memory) -> str:
-    parts = [memory.title, memory.summary, memory.content[:MAX_INDEXED_CONTENT_CHARS], " ".join(memory.tags)]
+    # Tags are sorted so the text (and therefore its hash) does not depend
+    # on whether the memory came from a write path or a database read.
+    parts = [memory.title, memory.summary, memory.content[:MAX_INDEXED_CONTENT_CHARS], " ".join(sorted(memory.tags))]
     slot = slot_text(memory)
     if slot:
         parts.append(slot)
@@ -82,6 +92,9 @@ def embedding_text_hash(memory: Memory, model_id: str) -> str:
     return short_hash(model_id + "\n" + embedding_text(memory), 32)
 
 
+def query_concepts(query: str) -> list[str]:
+    return [CONCEPT_PREFIX + c for c in concepts_for_text(query)]
+
+
 def query_terms(query: str) -> list[str]:
-    tokens = tokenize(query)
-    return tokens + [CONCEPT_PREFIX + c for c in concepts_for_tokens(tokens)]
+    return tokenize(query) + query_concepts(query)

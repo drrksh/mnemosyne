@@ -178,11 +178,18 @@ def evaluate(
             result = container.retrieval.recall(RecallRequest(query=query.text, context=context, limit=10))
             latencies.append(result.took_ms)
             ranked = [labels[s.memory.id] for s in result.items]
+            # Leakage = a forbidden label, or (when the query has a repo) a
+            # memory scoped to a *different* repo. Without a repo context,
+            # repo-scoped results are precision misses (nDCG), not leakage.
             leaked = [
                 label
                 for label in ranked[:k]
                 if label in query.forbidden
-                or (label_scope[label].startswith("repo:") and label_scope[label] != f"repo:{query.repo}")
+                or (
+                    query.repo is not None
+                    and label_scope[label].startswith("repo:")
+                    and label_scope[label] != f"repo:{query.repo}"
+                )
             ]
             report.outcomes.append(
                 QueryOutcome(

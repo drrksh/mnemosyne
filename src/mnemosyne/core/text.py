@@ -37,7 +37,8 @@ STOPWORDS: frozenset[str] = frozenset(
     very was we were what when where which while who whom why will with would you your
     yours yourself yourselves also etc via per e.g i.e ok okay please thing things stuff
     really lot lots get got make made want like need may might must shall us don doesn didn
-    isn aren wasn weren won shouldn couldn wouldn hasn haven ll ve re
+    isn aren wasn weren won shouldn couldn wouldn hasn haven ll ve re new add adding added
+    create creating created write writing written implement implementing implemented help
     """.split()
 )
 
@@ -150,20 +151,29 @@ _DOUBLE_CONSONANT_EXCEPTIONS = frozenset("lsz")
 
 @lru_cache(maxsize=65536)
 def stem(word: str) -> str:
-    """Light, deterministic suffix stripping for English developer prose."""
+    """Light, deterministic suffix stripping for English developer prose.
+
+    The lemma map runs first and its output is stemmed like any other
+    word, so `db` -> `database` and `databases` -> `database` converge on
+    the same stem. A final silent `e` is dropped so `translate`,
+    `translated` and `translating` agree (Porter's step 5a, in spirit)."""
     w = LEMMAS.get(word, word)
-    if w != word or len(w) <= 3 or not w.isalpha():
+    if len(w) <= 3 or not w.isalpha():
         return w
     if w.endswith("ies") and len(w) > 4:
-        return w[:-3] + "y"
-    if w.endswith("sses"):
-        return w[:-2]
-    if w.endswith("ing") and len(w) - 3 >= 4:
-        return _undouble(w[:-3])
-    if w.endswith("ed") and len(w) - 2 >= 4:
-        return _undouble(w[:-2])
-    if w.endswith("s") and not w.endswith(("ss", "us", "is", "ous")) and len(w) > 3:
-        return w[:-1]
+        w = w[:-3] + "y"
+    elif w.endswith("sses"):
+        w = w[:-2]
+    elif w.endswith("ing") and len(w) - 3 >= 4:
+        w = _undouble(w[:-3])
+    elif w.endswith("ed") and len(w) - 2 >= 4:
+        w = _undouble(w[:-2])
+    elif w.endswith(("ches", "shes", "xes", "zes")) and len(w) > 4:
+        w = w[:-2]
+    elif w.endswith("s") and not w.endswith(("ss", "us", "is", "ous")) and len(w) > 3:
+        w = w[:-1]
+    if w.endswith("e") and not w.endswith("ee") and len(w) > 4:
+        w = w[:-1]
     return w
 
 
@@ -185,45 +195,53 @@ def split_identifier(token: str) -> tuple[str, ...]:
     return tuple(p.lower() for p in parts if p)
 
 
-def _keep(word: str, stemmed: str, drop_directives: bool) -> bool:
+def _keep(word: str, stemmed: str, drop_directives: bool, keep_stopwords: bool = False) -> bool:
     if len(word) == 1 and word not in _MEANINGFUL_SINGLE_CHARS:
         return False
-    if word in STOPWORDS or stemmed in STOPWORDS:
+    if not keep_stopwords and (word in STOPWORDS or stemmed in STOPWORDS):
         return False
     return not (drop_directives and (word in DIRECTIVE_WORDS or stemmed in DIRECTIVE_WORDS))
 
 
 @lru_cache(maxsize=131072)
-def _analyze_raw_token(raw: str, drop_directives: bool) -> tuple[str, ...]:
+def _analyze_raw_token(
+    raw: str, drop_directives: bool, keep_stopwords: bool = False, split_identifiers: bool = True
+) -> tuple[str, ...]:
     whole = raw.lower().strip(".-/")
     if not whole:
         return ()
     out: list[str] = []
     stemmed_whole = stem(whole)
-    if _keep(whole, stemmed_whole, drop_directives):
+    if _keep(whole, stemmed_whole, drop_directives, keep_stopwords):
         out.append(stemmed_whole)
     # Known vocabulary ("PostgreSQL") is a word, not an identifier to split.
-    if whole in LEMMAS:
+    if whole in LEMMAS or not split_identifiers:
         return tuple(out)
     parts = split_identifier(raw)
     if len(parts) > 1:
         for part in parts:
             stemmed = stem(part)
-            if len(part) < 2 or not _keep(part, stemmed, drop_directives):
+            if len(part) < 2 or not _keep(part, stemmed, drop_directives, keep_stopwords):
                 continue
             if stemmed not in out:
                 out.append(stemmed)
     return tuple(out)
 
 
-def tokenize(text: str, *, drop_directives: bool = True) -> list[str]:
+def tokenize(
+    text: str, *, drop_directives: bool = True, keep_stopwords: bool = False, split_identifiers: bool = True
+) -> list[str]:
     """Retrieval tokenizer: lowercase, identifier-splitting, stopword
-    removal, light stemming. Order is preserved (bigrams depend on it)."""
+    removal, light stemming. Order is preserved (bigrams depend on it).
+
+    `keep_stopwords` and `split_identifiers=False` are for concept
+    detection, where function words ("should", "versus") carry signal and
+    identifier parts ("payments" in `payments-api`) are noise."""
     if not text:
         return []
     tokens: list[str] = []
     for match in _RAW_TOKEN_RE.finditer(text):
-        tokens.extend(_analyze_raw_token(match.group(0), drop_directives))
+        tokens.extend(_analyze_raw_token(match.group(0), drop_directives, keep_stopwords, split_identifiers))
     return tokens
 
 

@@ -18,12 +18,12 @@ from mnemosyne.config import Settings, get_settings
 from mnemosyne.core.memory_engine import EngineLimits, MemoryEngine
 from mnemosyne.db import migrate
 from mnemosyne.db.base import Base
-from mnemosyne.db.session import create_engine_from_settings, create_session_factory
+from mnemosyne.db.session import create_engine_from_settings, create_session_factory, is_in_memory_sqlite
 from mnemosyne.db.unit_of_work import UnitOfWork
 from mnemosyne.domain.principal import Permission, Principal
 from mnemosyne.repositories.sqlite import orm_models  # noqa: F401  (registers models on Base.metadata)
 from mnemosyne.retrieval.embeddings import Embedder, build_embedder
-from mnemosyne.retrieval.index import IndexCache
+from mnemosyne.retrieval.index import DiskIndexCache, IndexCache
 from mnemosyne.retrieval.indexer import MemoryIndexer
 from mnemosyne.retrieval.ranker import HybridRanker, RankingWeights
 from mnemosyne.services.identity_service import IdentityService
@@ -70,8 +70,16 @@ class Mnemosyne:
         self.memories = MemoryService(
             self.uow_factory, self.memory_engine, indexer=self.indexer, default_principal=self.default_principal
         )
+        disk_cache = None
+        if not is_in_memory_sqlite(self.settings.database_url):
+            disk_cache = DiskIndexCache(self.settings.cache_dir, namespace=self.settings.database_url)
         self.retrieval = RetrievalService(
-            self.uow_factory, self.indexer, self.ranker, self.index_cache, default_principal=self.default_principal
+            self.uow_factory,
+            self.indexer,
+            self.ranker,
+            self.index_cache,
+            default_principal=self.default_principal,
+            disk_cache=disk_cache,
         )
 
     # ------------------------------------------------------------------

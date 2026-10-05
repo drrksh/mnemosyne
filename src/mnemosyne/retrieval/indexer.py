@@ -50,8 +50,8 @@ class MemoryIndexer:
                 exc_info=True,
             )
             return 0
-        for memory, vector in zip(memories, matrix, strict=True):
-            uow.embeddings.upsert(
+        uow.embeddings.upsert_many(
+            [
                 StoredEmbedding(
                     memory_id=memory.id,
                     model=self.model_id,
@@ -59,7 +59,9 @@ class MemoryIndexer:
                     vector=pack_vector(vector),
                     text_hash=embedding_text_hash(memory, self.model_id),
                 )
-            )
+                for memory, vector in zip(memories, matrix, strict=True)
+            ]
+        )
         return len(memories)
 
     def load_vectors(

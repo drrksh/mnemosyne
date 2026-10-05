@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 import numpy as np
 
 from mnemosyne.core.text import tokenize
-from mnemosyne.core.vocabulary import concepts_for_tokens
+from mnemosyne.core.vocabulary import concepts_for_text, vocabulary_fingerprint
 from mnemosyne.domain.exceptions import ConfigurationError, RepositoryError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -99,7 +99,9 @@ class HashingEmbedder(Embedder):
         if dim < 32:
             raise ConfigurationError("hashing embedder needs at least 32 dimensions")
         self.dim = dim
-        self.model_id = f"hashing-v{self.VERSION}-{dim}"
+        # The vocabulary fingerprint makes any tokenizer or concept change a
+        # new vector space; stale stored vectors are then recomputed.
+        self.model_id = f"hashing-v{self.VERSION}-{dim}-{vocabulary_fingerprint()}"
 
     def features(self, text: str) -> dict[str, float]:
         tokens = tokenize(text)
@@ -113,7 +115,7 @@ class HashingEmbedder(Embedder):
 
         add(Counter("w:" + t for t in tokens), self.WORD_WEIGHT)
         add(Counter(f"b:{a}_{b}" for a, b in pairwise(tokens)), self.BIGRAM_WEIGHT)
-        add(Counter("c:" + c for c in concepts_for_tokens(tokens)), self.CONCEPT_WEIGHT)
+        add(Counter("c:" + c for c in concepts_for_text(text)), self.CONCEPT_WEIGHT)
         grams: Counter[str] = Counter()
         for token in set(tokens):
             if len(token) >= self.NGRAM_MIN_TOKEN_LEN and token.isalpha():

@@ -22,7 +22,7 @@ from mnemosyne.domain.entities import Memory
 from mnemosyne.domain.enums import MemoryOrigin, MemoryType
 from mnemosyne.domain.principal import LOCAL_PRINCIPAL, Principal
 from mnemosyne.domain.working_context import WorkingContext
-from mnemosyne.retrieval.index import IndexCache, RetrievalIndex
+from mnemosyne.retrieval.index import DiskIndexCache, IndexCache, RetrievalIndex
 from mnemosyne.retrieval.indexer import MemoryIndexer
 from mnemosyne.retrieval.ranker import HybridRanker, ScoredMemory, resolve_slots
 from mnemosyne.utils.time import utcnow
@@ -67,11 +67,13 @@ class RetrievalService:
         cache: Optional[IndexCache] = None,
         *,
         default_principal: Principal = LOCAL_PRINCIPAL,
+        disk_cache: Optional[DiskIndexCache] = None,
     ) -> None:
         self._uow_factory = uow_factory
         self.indexer = indexer
         self.ranker = ranker
         self.cache = cache or IndexCache()
+        self.disk_cache = disk_cache
         self._default_principal = default_principal
 
     # ------------------------------------------------------------------
@@ -82,6 +84,10 @@ class RetrievalService:
         with self._uow_factory() as uow:
             signature = uow.memories.index_signature(visibility)
             cached = self.cache.get(key, signature)
+            if cached is None and self.disk_cache is not None:
+                cached = self.disk_cache.get(key, signature)
+                if cached is not None:
+                    self.cache.put(key, signature, cached)
             if cached is not None:
                 uow.commit()
                 return cached
@@ -93,6 +99,8 @@ class RetrievalService:
             model_id=self.indexer.model_id, memories=memories, vectors=vectors, has_vector=mask
         )
         self.cache.put(key, signature, index)
+        if self.disk_cache is not None:
+            self.disk_cache.put(key, signature, index)
         logger.info(
             "retrieval_index_built",
             extra={

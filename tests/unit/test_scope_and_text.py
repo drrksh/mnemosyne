@@ -48,16 +48,16 @@ def test_working_context_affinity():
     assert ctx.applicable_scopes() == ["global", "lang:python", "repo:github.com/acme/api"]
 
 
-def test_empty_working_context_applies_everything_neutrally():
+def test_empty_working_context_applies_everything_but_prefers_general_knowledge():
     ctx = WorkingContext()
-    assert ctx.scope_affinity("repo:a/b") == ctx.scope_affinity("global") == 0.5
+    assert ctx.scope_affinity("global") > ctx.scope_affinity("lang:python") > ctx.scope_affinity("repo:a/b") > 0
 
 
 def test_tokenizer_splits_identifiers_and_drops_noise():
     assert tokenize("getUserById") == ["getuserbyid", "user", "id"]
-    assert "snake" in tokenize("snake_case_name") and "case" in tokenize("snake_case_name")
-    assert tokenize("Don't use mutable default args") == ["mutable", "default", "argument"]
-    assert tokenize("PostgreSQL") == ["postgres"]
+    assert {stem("snake"), stem("case"), stem("name")} <= set(tokenize("snake_case_name"))
+    assert tokenize("Don't use mutable default args") == [stem("mutable"), stem("default"), "argument"]
+    assert tokenize("PostgreSQL") == tokenize("postgres") == tokenize("pg")
 
 
 def test_stemming_is_consistent_for_common_forms():

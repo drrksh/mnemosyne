@@ -53,14 +53,14 @@ class WorkingContext:
         """How strongly a memory with `scope` applies here, in [0, 1], or
         None when it does not apply at all (another repo / language).
 
-        With an empty context nothing is known, so every scope applies at
-        a neutral affinity — that is what a plain search wants."""
+        With an empty context nothing is known, so every scope applies, but
+        general knowledge is favoured over memories tied to one project."""
         try:
             parsed = Scope.parse(scope)
         except Exception:
             return None
         if self.is_empty:
-            return 0.5
+            return {ScopeKind.GLOBAL: 0.6, ScopeKind.LANGUAGE: 0.5}.get(parsed.kind, 0.35)
         if parsed.kind == ScopeKind.GLOBAL:
             return 0.6
         if parsed.kind == ScopeKind.LANGUAGE:

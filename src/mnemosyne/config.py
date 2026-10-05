@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 64
 
     #: Weights of the hybrid ranking function (see retrieval/ranker.py).
-    weight_relevance: float = 0.55
+    weight_relevance: float = 0.7
     weight_importance: float = 0.12
     weight_confidence: float = 0.08
     weight_recency: float = 0.07
@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     weight_reinforcement: float = 0.05
     #: Share of the relevance signal taken from embeddings (rest is BM25).
     semantic_share: float = 0.5
+    #: Share of relevance taken from developer-concept overlap.
+    concept_share: float = 0.1
     #: Memories with relevance below this are not "about" the query.
     min_relevance: float = 0.06
     recency_half_life_days: float = 90.0

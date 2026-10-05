@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Iterable, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -138,6 +138,40 @@ class SqlEmbeddingRepository(EmbeddingRepository):
             self._session.flush()
         except SQLAlchemyError as exc:
             raise RepositoryError("Failed to persist embedding") from exc
+
+    def upsert_many(self, embeddings: Sequence[StoredEmbedding]) -> None:
+        """Delete-then-insert in chunks: portable across SQLite and
+        PostgreSQL (no dialect-specific ON CONFLICT), and two statements per
+        chunk instead of a lookup and flush per row."""
+        if not embeddings:
+            return
+        now = utcnow()
+        table = MemoryEmbeddingORM.__table__
+        try:
+            for start in range(0, len(embeddings), _IN_CHUNK):
+                chunk = embeddings[start : start + _IN_CHUNK]
+                ids = [str(e.memory_id) for e in chunk]
+                self._session.execute(delete(table).where(table.c.memory_id.in_(ids)))
+                self._session.execute(
+                    insert(table),
+                    [
+                        {
+                            "memory_id": str(e.memory_id),
+                            "model": e.model,
+                            "dim": e.dim,
+                            "vector": e.vector,
+                            "text_hash": e.text_hash,
+                            "updated_at": now,
+                        }
+                        for e in chunk
+                    ],
+                )
+            # Rows were written behind the ORM's back; drop any stale
+            # identity-map copies.
+            for orm in [o for o in self._session.identity_map.values() if isinstance(o, MemoryEmbeddingORM)]:
+                self._session.expunge(orm)
+        except SQLAlchemyError as exc:
+            raise RepositoryError("Failed to persist embeddings") from exc
 
     def get_many(self, memory_ids: Sequence[UUID], *, model: str) -> dict[UUID, StoredEmbedding]:
         out: dict[UUID, StoredEmbedding] = {}

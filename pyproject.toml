@@ -67,3 +67,4 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/mnemosyne/migrations/versions/*.py" = ["E501", "I001", "UP035"]
 "tests/**/*.py" = ["B017", "SIM117"]
+"src/mnemosyne/evaluation/persona.py" = ["E501"]  # labeled evaluation data

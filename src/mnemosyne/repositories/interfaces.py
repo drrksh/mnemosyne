@@ -170,6 +170,10 @@ class EmbeddingRepository(ABC):
         ...
 
     @abstractmethod
+    def upsert_many(self, embeddings: Sequence[StoredEmbedding]) -> None:
+        """Bulk form of `upsert` (one memory may appear at most once)."""
+
+    @abstractmethod
     def get_many(self, memory_ids: Sequence[UUID], *, model: str) -> dict[UUID, StoredEmbedding]:
         ...
 
