@@ -34,6 +34,9 @@ def _isolated_home(tmp_path, monkeypatch):
     """No test may read or write the developer's real ~/.mnemosyne."""
     home = tmp_path / "mnemosyne-home"
     monkeypatch.setenv("MNEMOSYNE_HOME", str(home))
+    # Hooks would otherwise start a real background daemon from the tests.
+    monkeypatch.setenv("MNEMOSYNE_HOOK_DAEMON", "0")
+    monkeypatch.delenv("MNEMOSYNE_CONFIG_FILE", raising=False)
     return home
 
 

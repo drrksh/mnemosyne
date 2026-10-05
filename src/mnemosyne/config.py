@@ -2,9 +2,10 @@
 Centralized application configuration.
 
 Every tunable value in Mnemosyne is defined here and sourced from
-environment variables (prefix `MNEMOSYNE_`), a `.env` file in the
-working directory, or `<home>/config.env` — nothing else in the
-codebase should hardcode a limit, a timeout, or a connection string.
+environment variables (prefix `MNEMOSYNE_`), `<home>/config.env`, or a
+file named by `MNEMOSYNE_CONFIG_FILE` — nothing else in the codebase
+should hardcode a limit, a timeout, or a connection string. A `.env` in
+the current directory is deliberately *not* read (see `Settings`).
 See DECISIONS.md, "Configuration strategy".
 
 Mnemosyne's memory belongs to a *person*, not to a project, so by
@@ -28,9 +29,11 @@ def default_home() -> Path:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env", env_prefix="MNEMOSYNE_", extra="ignore", frozen=True
-    )
+    # No `.env` from the current directory, ever: hooks and the MCP server
+    # run inside whatever repository the developer has open, and a cloned
+    # repository must not be able to redirect their memory (for example by
+    # setting MNEMOSYNE_SERVER_URL). See `load_settings()`.
+    model_config = SettingsConfigDict(env_file=None, env_prefix="MNEMOSYNE_", extra="ignore", frozen=True)
 
     app_env: Literal["development", "testing", "production"] = "development"
 
@@ -124,6 +127,10 @@ class Settings(BaseSettings):
     hook_max_tokens: int = 1800
     #: Fraction of the budget reserved for always-on profile memories.
     context_profile_share: float = 0.45
+    #: Answer editor hooks from a warm background daemon (POSIX only; see
+    #: integrations/hook_daemon.py). Off: every hook starts from scratch.
+    hook_daemon: bool = True
+    hook_daemon_idle_minutes: int = 30
 
     # --- Learning ----------------------------------------------------------
     learning_min_confidence: float = 0.55
@@ -183,11 +190,20 @@ class Settings(BaseSettings):
         self.logs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
+def config_files() -> tuple[Path, ...]:
+    """Files read for configuration, lowest precedence first: the user's
+    `<home>/config.env`, then the file named by `MNEMOSYNE_CONFIG_FILE`
+    (deployments). Environment variables override both."""
+    files = [default_home() / "config.env"]
+    explicit = os.environ.get("MNEMOSYNE_CONFIG_FILE")
+    if explicit:
+        files.append(Path(explicit).expanduser())
+    return tuple(files)
+
+
 def load_settings() -> Settings:
-    """Fresh Settings from the environment, `<home>/config.env` and `.env`
-    (later sources win)."""
-    home = default_home()
-    return Settings(_env_file=(home / "config.env", ".env"))
+    """Fresh Settings from the environment and the files in `config_files()`."""
+    return Settings(_env_file=config_files())
 
 
 @lru_cache

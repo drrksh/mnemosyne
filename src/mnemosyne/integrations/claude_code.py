@@ -149,10 +149,16 @@ def handle_transcript(payload: dict[str, Any], settings: Settings,
     return HookOutput(detail={"spawned": True})
 
 
-def spawn_detached(argv: list[str]) -> None:
-    log_dir = Path(os.environ.get("MNEMOSYNE_HOME") or Path.home() / ".mnemosyne") / "logs"
+def mnemosyne_home() -> Path:
+    """The home directory, resolved without loading Settings (hooks must
+    stay cheap); matches `config.default_home()`."""
+    return Path(os.environ.get("MNEMOSYNE_HOME") or Path.home() / ".mnemosyne").expanduser()
+
+
+def spawn_detached(argv: list[str], *, log_name: str = "learner.log") -> None:
+    log_dir = mnemosyne_home() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    with open(log_dir / "learner.log", "ab") as log:
+    with open(log_dir / log_name, "ab") as log:
         subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,

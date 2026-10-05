@@ -59,7 +59,7 @@ def cli(ctx: click.Context, home: Optional[Path], verbose: bool) -> None:
     """
     if home is not None:
         os.environ["MNEMOSYNE_HOME"] = str(home.expanduser())
-    configure_cli_logging(verbose, quiet=ctx.invoked_subcommand in ("hook", "mcp"))
+    configure_cli_logging(verbose, quiet=ctx.invoked_subcommand in ("hook", "mcp", "daemon"))
     state = ctx.ensure_object(CliState)
     state.verbose = verbose
     ctx.call_on_close(state.close)
@@ -165,8 +165,16 @@ def doctor(state: CliState) -> None:
          optional=True)
     import shutil
 
+    from mnemosyne.integrations import hook_daemon
+
     line(shutil.which("claude") is not None, "claude CLI on PATH", "needed for user-scope MCP registration",
          optional=True)
+    if not settings.hook_daemon or not hook_daemon.SUPPORTED:
+        line(True, "hook daemon", "off: each hook starts from scratch (~0.7 s)", optional=True)
+    else:
+        running = hook_daemon.daemon_status(settings.home)
+        line(running is not None, "hook daemon", f"pid {running['pid']}, {running['requests']} requests"
+             if running else "not running; the next hook starts it", optional=True)
     if settings.llm_extraction:
         try:
             import anthropic  # noqa: F401
@@ -487,21 +495,103 @@ def mcp(state: CliState) -> None:
 @click.argument("name", type=click.Choice(["session-start", "user-prompt", "pre-compact", "session-end"]))
 @pass_state
 def hook(state: CliState, name: str) -> None:
-    """Claude Code hook entry point (reads the event JSON on stdin)."""
-    from mnemosyne.integrations.claude_code import run_hook
+    """Claude Code hook entry point (reads the event JSON on stdin).
+
+    Tries the warm daemon first (milliseconds); otherwise handles the event
+    in-process and starts the daemon for next time.
+    """
+    from mnemosyne.integrations import hook_daemon
+    from mnemosyne.integrations.claude_code import HOOK_EVENTS, mnemosyne_home, run_hook, self_command
 
     try:
         stdin_text = sys.stdin.read()
     except Exception:
         stdin_text = ""
+    home = mnemosyne_home()
+    timeout = next(t for h, _, t in HOOK_EVENTS.values() if h == name)
+    answered = hook_daemon.call_daemon(name, stdin_text, home, timeout=max(1.0, timeout - 3.0))
+    if answered is not None:
+        stdout, exit_code = answered
+        if stdout:
+            click.echo(stdout)
+        sys.exit(exit_code)
 
-    def factory():
-        return state.backend
-
-    output = run_hook(name, stdin_text, settings=state.settings, backend_factory=factory)  # type: ignore[arg-type]
+    output = run_hook(name, stdin_text, settings=state.settings,  # type: ignore[arg-type]
+                      backend_factory=lambda: state.backend)
     if output.stdout:
         click.echo(output.stdout)
+        sys.stdout.flush()
+    try:
+        if state.settings.hook_daemon:
+            hook_daemon.start_daemon_detached(home, self_command())
+    except Exception:  # an optimisation must never fail the hook
+        pass
     sys.exit(output.exit_code)
+
+
+@cli.group()
+def daemon() -> None:
+    """The background process that answers editor hooks quickly (started automatically)."""
+
+
+@daemon.command(name="run")
+@click.option("--idle-minutes", type=int, help="Exit after this long without requests (default from settings).")
+@pass_state
+def daemon_run(state: CliState, idle_minutes: Optional[int]) -> None:
+    """Run in the foreground."""
+    from mnemosyne.integrations.hook_daemon import SUPPORTED, HookDaemon
+
+    if not SUPPORTED:
+        raise click.ClickException("the hook daemon needs Unix domain sockets (Linux, macOS)")
+    settings = state.settings
+    if not settings.hook_daemon:
+        click.echo("hook daemon disabled (MNEMOSYNE_HOOK_DAEMON=false)", err=True)
+        return
+    settings.ensure_home()
+    configure_cli_logging(state.verbose)
+    idle = 60 * (idle_minutes if idle_minutes is not None else settings.hook_daemon_idle_minutes)
+    code = HookDaemon(settings, idle_seconds=idle).serve()
+    if code == 1:
+        click.echo("another daemon is already running", err=True)
+
+
+@daemon.command(name="start")
+@pass_state
+def daemon_start(state: CliState) -> None:
+    """Start in the background (normally the first hook does this)."""
+    from mnemosyne.integrations import hook_daemon
+    from mnemosyne.integrations.claude_code import self_command
+
+    if hook_daemon.daemon_status(state.settings.home):
+        click.echo("already running")
+        return
+    started = hook_daemon.start_daemon_detached(state.settings.home, self_command())
+    click.echo("starting" if started else "not started (unsupported platform, disabled, or already starting)")
+
+
+@daemon.command(name="stop")
+@pass_state
+def daemon_stop(state: CliState) -> None:
+    """Stop it (the next hook starts a fresh one; use after changing settings by hand)."""
+    from mnemosyne.integrations import hook_daemon
+
+    click.echo("stopped" if hook_daemon.stop_daemon(state.settings.home) else "not running")
+
+
+@daemon.command(name="status")
+@click.option("--json", "as_json", is_flag=True)
+@pass_state
+def daemon_status_cmd(state: CliState, as_json: bool) -> None:
+    from mnemosyne.integrations import hook_daemon
+
+    status = hook_daemon.daemon_status(state.settings.home)
+    if as_json:
+        echo_json(status)
+    elif status is None:
+        click.echo("not running")
+    else:
+        click.echo(f"running · pid {status['pid']} · {status['requests']} requests · "
+                   f"idle {status['idle_seconds']:.0f}s · {status['backend']} backend")
 
 
 # ----------------------------------------------------------------------
