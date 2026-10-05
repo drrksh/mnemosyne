@@ -23,19 +23,57 @@ from mnemosyne.db.session import create_engine_from_settings, create_session_fac
 from mnemosyne.db.unit_of_work import UnitOfWork
 from mnemosyne.domain.dto import NewMemoryData
 from mnemosyne.domain.enums import MemoryType
+
 # Ensure ORM models are registered on Base.metadata before create_all.
 from mnemosyne.repositories.sqlite import orm_models  # noqa: F401
 from mnemosyne.services.memory_service import MemoryService
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    """No test may read or write the developer's real ~/.mnemosyne."""
+    home = tmp_path / "mnemosyne-home"
+    monkeypatch.setenv("MNEMOSYNE_HOME", str(home))
+    return home
+
+
 @pytest.fixture
-def test_settings() -> Settings:
+def test_settings(_isolated_home) -> Settings:
     return Settings(
         database_url="sqlite:///:memory:",
         app_env="testing",
         log_format="console",
         sql_echo=False,
+        home=_isolated_home,
     )
+
+
+@pytest.fixture
+def container(test_settings: Settings):
+    from mnemosyne.container import Mnemosyne
+
+    instance = Mnemosyne(test_settings, schema="create")
+    yield instance
+    instance.close()
+
+
+@pytest.fixture
+def api_key_app(_isolated_home):
+    """An app in multi-tenant `api_key` auth mode."""
+    from mnemosyne.api.app import create_app
+    from mnemosyne.container import Mnemosyne
+
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        app_env="testing",
+        log_format="console",
+        auth_mode="api_key",
+        home=_isolated_home,
+    )
+    instance = Mnemosyne(settings, schema="create")
+    application = create_app(container=instance)
+    yield application
+    instance.close()
 
 
 @pytest.fixture

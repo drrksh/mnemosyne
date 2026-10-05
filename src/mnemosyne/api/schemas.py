@@ -22,8 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mnemosyne.config import get_settings
 from mnemosyne.domain.dto import MemoryUpdateData, NewMemoryData, SearchResult
-from mnemosyne.domain.entities import Memory, MemoryVersion
-from mnemosyne.domain.enums import MemoryStatus, MemoryType
+from mnemosyne.domain.entities import Evidence, Memory, MemoryVersion
+from mnemosyne.domain.enums import EvidenceKind, MemoryOrigin, MemoryStatus, MemoryType
 
 _settings = get_settings()
 
@@ -39,6 +39,14 @@ class MemoryCreateRequest(BaseModel):
     source: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = None
+    scope: str = Field(default="global", description="'global', 'lang:<language>' or 'repo:<repo-id>'")
+    key: Optional[str] = Field(
+        default=None, description="Slot key such as 'python.test_framework'; a new value supersedes the old one."
+    )
+    value: Optional[str] = None
+    origin: MemoryOrigin = MemoryOrigin.EXPLICIT
+    pinned: bool = False
+    team_id: Optional[str] = Field(default=None, description="Create as a team memory (caller must be a member).")
 
     def to_domain(self) -> NewMemoryData:
         return NewMemoryData(
@@ -52,6 +60,12 @@ class MemoryCreateRequest(BaseModel):
             source=self.source,
             metadata=self.metadata,
             notes=self.notes,
+            scope=self.scope,
+            key=self.key,
+            value=self.value,
+            origin=self.origin,
+            pinned=self.pinned,
+            team_id=self.team_id,
         )
 
 
@@ -68,6 +82,10 @@ class MemoryUpdateRequest(BaseModel):
     source: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
     notes: Optional[str] = None
+    scope: Optional[str] = None
+    key: Optional[str] = None
+    value: Optional[str] = None
+    pinned: Optional[bool] = None
     expected_version: Optional[int] = Field(
         default=None,
         description="If set, the update is rejected with 409 unless the memory is still at this version.",
@@ -79,6 +97,7 @@ class MemoryUpdateRequest(BaseModel):
         for field_name in (
             "title", "summary", "content", "memory_type", "confidence_score",
             "importance_score", "tags", "source", "metadata", "notes",
+            "scope", "key", "value", "pinned",
         ):
             if field_name in provided:
                 setattr(data, field_name, getattr(self, field_name))
@@ -104,9 +123,19 @@ class MemoryResponse(BaseModel):
     access_count: int
     last_accessed_at: Optional[datetime]
     deleted_at: Optional[datetime]
+    owner_id: str
+    team_id: Optional[str]
+    scope: str
+    key: Optional[str]
+    value: Optional[str]
+    origin: MemoryOrigin
+    reinforcement_count: int
+    last_reinforced_at: Optional[datetime]
+    pinned: bool
+    superseded_by: Optional[UUID]
 
     @classmethod
-    def from_domain(cls, memory: Memory) -> "MemoryResponse":
+    def from_domain(cls, memory: Memory) -> MemoryResponse:
         return cls(
             id=memory.id,
             title=memory.title,
@@ -126,6 +155,16 @@ class MemoryResponse(BaseModel):
             access_count=memory.access_count,
             last_accessed_at=memory.last_accessed_at,
             deleted_at=memory.deleted_at,
+            owner_id=memory.owner_id,
+            team_id=memory.team_id,
+            scope=memory.scope,
+            key=memory.key,
+            value=memory.value,
+            origin=memory.origin,
+            reinforcement_count=memory.reinforcement_count,
+            last_reinforced_at=memory.last_reinforced_at,
+            pinned=memory.pinned,
+            superseded_by=memory.superseded_by,
         )
 
 
@@ -147,9 +186,15 @@ class MemoryVersionResponse(BaseModel):
     changed_fields: list[str]
     change_reason: Optional[str]
     recorded_at: datetime
+    scope: str
+    key: Optional[str]
+    value: Optional[str]
+    origin: MemoryOrigin
+    pinned: bool
+    superseded_by: Optional[UUID]
 
     @classmethod
-    def from_domain(cls, version: MemoryVersion) -> "MemoryVersionResponse":
+    def from_domain(cls, version: MemoryVersion) -> MemoryVersionResponse:
         return cls(
             id=version.id,
             memory_id=version.memory_id,
@@ -168,6 +213,12 @@ class MemoryVersionResponse(BaseModel):
             changed_fields=version.changed_fields,
             change_reason=version.change_reason,
             recorded_at=version.recorded_at,
+            scope=version.scope,
+            key=version.key,
+            value=version.value,
+            origin=version.origin,
+            pinned=version.pinned,
+            superseded_by=version.superseded_by,
         )
 
 
@@ -180,7 +231,7 @@ class PaginatedMemoryResponse(BaseModel):
     has_next: bool
 
     @classmethod
-    def from_result(cls, result: SearchResult) -> "PaginatedMemoryResponse":
+    def from_result(cls, result: SearchResult) -> PaginatedMemoryResponse:
         return cls(
             items=[MemoryResponse.from_domain(m) for m in result.items],
             total=result.total,
@@ -202,6 +253,28 @@ class BulkUpdateEntry(BaseModel):
 
 class BulkUpdateRequest(BaseModel):
     items: list[BulkUpdateEntry] = Field(..., min_length=1, max_length=500)
+
+
+class EvidenceResponse(BaseModel):
+    id: UUID
+    memory_id: UUID
+    kind: EvidenceKind
+    source_ref: str
+    excerpt: str
+    weight: float
+    observed_at: datetime
+
+    @classmethod
+    def from_domain(cls, evidence: Evidence) -> EvidenceResponse:
+        return cls(
+            id=evidence.id,
+            memory_id=evidence.memory_id,
+            kind=evidence.kind,
+            source_ref=evidence.source_ref,
+            excerpt=evidence.excerpt,
+            weight=evidence.weight,
+            observed_at=evidence.observed_at,
+        )
 
 
 class ErrorResponse(BaseModel):

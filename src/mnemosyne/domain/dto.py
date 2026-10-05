@@ -18,7 +18,8 @@ from typing import Any, Optional
 from uuid import UUID
 
 from mnemosyne.domain.entities import Memory
-from mnemosyne.domain.enums import MemoryStatus, MemoryType
+from mnemosyne.domain.enums import MemoryOrigin, MemoryStatus, MemoryType
+from mnemosyne.domain.principal import Visibility
 from mnemosyne.domain.value_objects import UNSET
 
 #: Sparse map of {field_name: new_value} for fields that actually changed.
@@ -41,6 +42,13 @@ class NewMemoryData:
     source: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
     notes: Optional[str] = None
+    scope: str = "global"
+    key: Optional[str] = None
+    value: Optional[str] = None
+    origin: MemoryOrigin = MemoryOrigin.EXPLICIT
+    pinned: bool = False
+    #: Create as a team memory (caller must be a member of the team).
+    team_id: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -55,6 +63,10 @@ class MemoryUpdateData:
     source: Any = UNSET
     metadata: Any = UNSET
     notes: Any = UNSET
+    scope: Any = UNSET
+    key: Any = UNSET
+    value: Any = UNSET
+    pinned: Any = UNSET
     change_reason: Optional[str] = None
 
 
@@ -84,6 +96,15 @@ class SearchCriteria:
     sort_desc: bool = True
     page: int = 1
     page_size: int = 20
+    #: Tenancy filter. `None` means "no tenancy filter" and is reserved
+    #: for trusted internal callers; the service layer always sets it
+    #: from the calling principal.
+    visibility: Optional[Visibility] = None
+    scopes: Optional[list[str]] = None
+    origins: Optional[list[MemoryOrigin]] = None
+    keys: Optional[list[str]] = None
+    pinned: Optional[bool] = None
+    team_id: Optional[str] = None
 
 
 @dataclass(slots=True)

@@ -15,10 +15,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mnemosyne.domain.exceptions import (
+    AuthenticationError,
     ConfigurationError,
     ConflictError,
     MnemosyneError,
     NotFoundError,
+    PermissionDeniedError,
     RepositoryError,
     ValidationError,
 )
@@ -31,6 +33,8 @@ logger = logging.getLogger("mnemosyne.api.errors")
 # handled correctly without needing a new entry here.
 _STATUS_BY_EXCEPTION: list[tuple[type[MnemosyneError], int]] = [
     (ValidationError, 422),
+    (AuthenticationError, 401),
+    (PermissionDeniedError, 403),
     (NotFoundError, 404),
     (ConflictError, 409),
     (ConfigurationError, 500),
@@ -62,7 +66,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         status_code = _status_for(exc)
         if status_code >= 500:
             logger.exception("domain_error", extra={"error_type": type(exc).__name__})
-        return _error_response(status_code, type(exc).__name__, exc.message)
+        response = _error_response(status_code, type(exc).__name__, exc.message)
+        if status_code == 401:
+            response.headers["WWW-Authenticate"] = "Bearer"
+        return response
 
     @app.exception_handler(Exception)
     async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:

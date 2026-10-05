@@ -1,14 +1,23 @@
 """
-MemoryService: the application/orchestration layer. See the package
-docstring in `services/__init__.py` for the layer's responsibilities.
+MemoryService: the application/orchestration layer for memory CRUD.
+See the package docstring in `services/__init__.py` for the layer's
+responsibilities.
+
+Every method acts on behalf of a `Principal`. Omitting it means "the
+service's default principal" — the local user in single-user mode.
+Multi-tenant callers (the REST API in `api_key` mode) always pass the
+authenticated principal explicitly.
+
+Tenancy rule: a memory the principal cannot see is reported as *not
+found*, never as *forbidden*, so the API does not leak which ids exist.
 """
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from typing import Callable, Optional
 from uuid import UUID
 
-from mnemosyne.core.memory_engine import MemoryEngine
+from mnemosyne.core.memory_engine import MemoryEngine, UpdatePlan
 from mnemosyne.db.unit_of_work import UnitOfWork
 from mnemosyne.domain.dto import (
     BulkUpdateItem,
@@ -17,9 +26,12 @@ from mnemosyne.domain.dto import (
     SearchCriteria,
     SearchResult,
 )
-from mnemosyne.domain.entities import Memory, MemoryVersion
+from mnemosyne.domain.entities import Evidence, Memory, MemoryVersion
 from mnemosyne.domain.enums import MemoryStatus
-from mnemosyne.domain.exceptions import ConflictError, NotFoundError
+from mnemosyne.domain.exceptions import ConflictError, NotFoundError, PermissionDeniedError
+from mnemosyne.domain.principal import LOCAL_PRINCIPAL, Permission, Principal
+from mnemosyne.retrieval.indexer import MemoryIndexer
+from mnemosyne.services import audit
 
 logger = logging.getLogger("mnemosyne.services.memory")
 
@@ -27,17 +39,65 @@ UowFactory = Callable[[], UnitOfWork]
 
 
 class MemoryService:
-    def __init__(self, uow_factory: UowFactory, engine: MemoryEngine) -> None:
+    def __init__(
+        self,
+        uow_factory: UowFactory,
+        engine: MemoryEngine,
+        *,
+        indexer: Optional[MemoryIndexer] = None,
+        default_principal: Principal = LOCAL_PRINCIPAL,
+    ) -> None:
         self._uow_factory = uow_factory
         self._engine = engine
+        self._indexer = indexer
+        self._default_principal = default_principal
+
+    @property
+    def engine(self) -> MemoryEngine:
+        return self._engine
+
+    def _who(self, principal: Optional[Principal]) -> Principal:
+        return principal or self._default_principal
+
+    # ------------------------------------------------------------------
+    # Guards
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _require(principal: Principal, permission: str) -> None:
+        if not principal.has(permission):
+            raise PermissionDeniedError(f"this credential lacks the '{permission}' permission")
+
+    @staticmethod
+    def _visible(memory: Optional[Memory], principal: Principal, memory_id: UUID) -> Memory:
+        if memory is None or not principal.can_see(memory):
+            raise NotFoundError(f"Memory {memory_id} not found")
+        return memory
+
+    def _writable(self, memory: Optional[Memory], principal: Principal, memory_id: UUID) -> Memory:
+        memory = self._visible(memory, principal, memory_id)
+        self._require(principal, Permission.WRITE)
+        if not principal.can_write_to(memory.team_id):
+            raise NotFoundError(f"Memory {memory_id} not found")
+        return memory
+
+    def _index(self, uow: UnitOfWork, memories: list[Memory]) -> None:
+        if self._indexer is not None:
+            self._indexer.index_many(uow, memories)
 
     # ------------------------------------------------------------------
     # Create
     # ------------------------------------------------------------------
-    def create_memory(self, data: NewMemoryData) -> Memory:
-        memory = self._engine.build_new_memory(data)
+    def create_memory(self, data: NewMemoryData, *, principal: Optional[Principal] = None) -> Memory:
+        who = self._who(principal)
+        self._require(who, Permission.WRITE)
+        if not who.can_write_to(data.team_id):
+            raise NotFoundError(f"Team {data.team_id} not found")
+        memory = self._engine.build_new_memory(data, owner_id=who.user_id)
         with self._uow_factory() as uow:
             uow.memories.add(memory)
+            self._index(uow, [memory])
+            audit.record(uow, who, "memory.create", target_type="memory", target_id=str(memory.id),
+                         memory_type=memory.memory_type.value, scope=memory.scope, team_id=memory.team_id)
             uow.commit()
         logger.info(
             "memory_created",
@@ -45,11 +105,20 @@ class MemoryService:
         )
         return memory
 
-    def create_memories_batch(self, items: list[NewMemoryData]) -> list[Memory]:
-        built = [self._engine.build_new_memory(item) for item in items]
+    def create_memories_batch(
+        self, items: list[NewMemoryData], *, principal: Optional[Principal] = None
+    ) -> list[Memory]:
+        who = self._who(principal)
+        self._require(who, Permission.WRITE)
+        for item in items:
+            if not who.can_write_to(item.team_id):
+                raise NotFoundError(f"Team {item.team_id} not found")
+        built = [self._engine.build_new_memory(item, owner_id=who.user_id) for item in items]
         with self._uow_factory() as uow:
             for memory in built:
                 uow.memories.add(memory)
+            self._index(uow, built)
+            audit.record(uow, who, "memory.create_batch", target_type="memory", count=len(built))
             uow.commit()
         logger.info("memories_batch_created", extra={"count": len(built)})
         return built
@@ -58,32 +127,61 @@ class MemoryService:
     # Read
     # ------------------------------------------------------------------
     def get_memory(
-        self, memory_id: UUID, *, include_deleted: bool = False, track_access: bool = True
+        self,
+        memory_id: UUID,
+        *,
+        include_deleted: bool = False,
+        track_access: bool = True,
+        principal: Optional[Principal] = None,
     ) -> Memory:
+        who = self._who(principal)
+        self._require(who, Permission.READ)
         with self._uow_factory() as uow:
-            memory = uow.memories.get(memory_id)
-            if memory is None or not memory.is_visible(include_deleted=include_deleted):
+            memory = self._visible(uow.memories.get(memory_id), who, memory_id)
+            if not memory.is_visible(include_deleted=include_deleted):
                 raise NotFoundError(f"Memory {memory_id} not found")
             if track_access:
                 memory = uow.memories.record_access(memory_id)
             uow.commit()
         return memory
 
-    def search_memories(self, criteria: SearchCriteria) -> SearchResult:
+    def search_memories(self, criteria: SearchCriteria, *, principal: Optional[Principal] = None) -> SearchResult:
+        who = self._who(principal)
+        self._require(who, Permission.READ)
+        # The tenancy filter always comes from the principal, never from
+        # the caller-supplied criteria.
+        criteria.visibility = who.visibility
         with self._uow_factory() as uow:
             result = uow.memories.search(criteria)
             uow.commit()
         return result
 
+    def list_evidence(
+        self, memory_id: UUID, *, limit: int = 100, principal: Optional[Principal] = None
+    ) -> list[Evidence]:
+        who = self._who(principal)
+        self._require(who, Permission.READ)
+        with self._uow_factory() as uow:
+            self._visible(uow.memories.get(memory_id), who, memory_id)
+            evidence = uow.evidence.list_for_memory(memory_id, limit=limit)
+            uow.commit()
+        return evidence
+
     # ------------------------------------------------------------------
     # Update
     # ------------------------------------------------------------------
     def update_memory(
-        self, memory_id: UUID, changes: MemoryUpdateData, *, expected_version: int | None = None
+        self,
+        memory_id: UUID,
+        changes: MemoryUpdateData,
+        *,
+        expected_version: int | None = None,
+        principal: Optional[Principal] = None,
     ) -> Memory:
+        who = self._who(principal)
         with self._uow_factory() as uow:
-            existing = uow.memories.get(memory_id)
-            if existing is None or existing.status == MemoryStatus.DELETED:
+            existing = self._writable(uow.memories.get(memory_id), who, memory_id)
+            if existing.status == MemoryStatus.DELETED:
                 raise NotFoundError(f"Memory {memory_id} not found")
             if expected_version is not None and existing.version != expected_version:
                 raise ConflictError(
@@ -96,8 +194,9 @@ class MemoryService:
                 uow.commit()
                 return existing
 
-            uow.memories.add_version(plan.version_snapshot)
-            updated = uow.memories.update(memory_id, existing.version, plan.changed_fields)
+            updated = self._persist_plan(uow, existing, plan)
+            audit.record(uow, who, "memory.update", target_type="memory", target_id=str(memory_id),
+                         changed_fields=plan.changed_field_names)
             uow.commit()
 
         logger.info(
@@ -106,12 +205,15 @@ class MemoryService:
         )
         return updated
 
-    def bulk_update_memories(self, items: list[BulkUpdateItem]) -> list[Memory]:
+    def bulk_update_memories(
+        self, items: list[BulkUpdateItem], *, principal: Optional[Principal] = None
+    ) -> list[Memory]:
+        who = self._who(principal)
         results: list[Memory] = []
         with self._uow_factory() as uow:
             for item in items:
-                existing = uow.memories.get(item.memory_id)
-                if existing is None or existing.status == MemoryStatus.DELETED:
+                existing = self._writable(uow.memories.get(item.memory_id), who, item.memory_id)
+                if existing.status == MemoryStatus.DELETED:
                     raise NotFoundError(f"Memory {item.memory_id} not found")
                 if item.expected_version is not None and existing.version != item.expected_version:
                     raise ConflictError(f"Memory {item.memory_id} version mismatch")
@@ -120,22 +222,28 @@ class MemoryService:
                 if plan.is_noop:
                     results.append(existing)
                     continue
-
-                uow.memories.add_version(plan.version_snapshot)
-                updated = uow.memories.update(item.memory_id, existing.version, plan.changed_fields)
-                results.append(updated)
+                results.append(self._persist_plan(uow, existing, plan))
+            audit.record(uow, who, "memory.update_batch", target_type="memory", count=len(items))
             uow.commit()
         logger.info("memories_bulk_updated", extra={"count": len(results)})
         return results
 
+    def _persist_plan(self, uow: UnitOfWork, existing: Memory, plan: UpdatePlan) -> Memory:
+        uow.memories.add_version(plan.version_snapshot)
+        updated = uow.memories.update(existing.id, existing.version, plan.persist_changes)
+        if {"title", "summary", "content", "tags", "key", "value"} & set(plan.changed_fields):
+            self._index(uow, [updated])
+        return updated
+
     # ------------------------------------------------------------------
     # Status transitions
     # ------------------------------------------------------------------
-    def _transition_status(self, memory_id: UUID, target: MemoryStatus, *, change_reason: str) -> Memory:
+    def _transition_status(
+        self, memory_id: UUID, target: MemoryStatus, *, change_reason: str, principal: Optional[Principal]
+    ) -> Memory:
+        who = self._who(principal)
         with self._uow_factory() as uow:
-            existing = uow.memories.get(memory_id)
-            if existing is None:
-                raise NotFoundError(f"Memory {memory_id} not found")
+            existing = self._writable(uow.memories.get(memory_id), who, memory_id)
 
             plan = self._engine.apply_status_transition(existing, target, change_reason=change_reason)
             if plan.is_noop:
@@ -143,7 +251,8 @@ class MemoryService:
                 return existing
 
             uow.memories.add_version(plan.version_snapshot)
-            updated = uow.memories.update(memory_id, existing.version, plan.changed_fields)
+            updated = uow.memories.update(memory_id, existing.version, plan.persist_changes)
+            audit.record(uow, who, f"memory.{change_reason}", target_type="memory", target_id=str(memory_id))
             uow.commit()
 
         logger.info(
@@ -151,44 +260,67 @@ class MemoryService:
         )
         return updated
 
-    def archive_memory(self, memory_id: UUID) -> Memory:
-        return self._transition_status(memory_id, MemoryStatus.ARCHIVED, change_reason="archived")
+    def archive_memory(self, memory_id: UUID, *, principal: Optional[Principal] = None) -> Memory:
+        return self._transition_status(memory_id, MemoryStatus.ARCHIVED, change_reason="archived", principal=principal)
 
-    def restore_memory(self, memory_id: UUID) -> Memory:
-        return self._transition_status(memory_id, MemoryStatus.ACTIVE, change_reason="restored")
+    def restore_memory(self, memory_id: UUID, *, principal: Optional[Principal] = None) -> Memory:
+        return self._transition_status(memory_id, MemoryStatus.ACTIVE, change_reason="restored", principal=principal)
 
-    def soft_delete_memory(self, memory_id: UUID) -> Memory:
-        return self._transition_status(memory_id, MemoryStatus.DELETED, change_reason="soft_deleted")
+    def soft_delete_memory(self, memory_id: UUID, *, principal: Optional[Principal] = None) -> Memory:
+        return self._transition_status(
+            memory_id, MemoryStatus.DELETED, change_reason="soft_deleted", principal=principal
+        )
 
-    def hard_delete_memory(self, memory_id: UUID) -> None:
+    def hard_delete_memory(self, memory_id: UUID, *, principal: Optional[Principal] = None) -> None:
+        who = self._who(principal)
         with self._uow_factory() as uow:
+            existing = self._visible(uow.memories.get(memory_id), who, memory_id)
+            if not who.can_hard_delete(existing):
+                raise PermissionDeniedError("only the owner (or a team maintainer) may permanently delete this memory")
             deleted = uow.memories.hard_delete(memory_id)
+            audit.record(uow, who, "memory.hard_delete", target_type="memory", target_id=str(memory_id))
             uow.commit()
-        if not deleted:
+        if not deleted:  # pragma: no cover - raced with another delete
             raise NotFoundError(f"Memory {memory_id} not found")
         logger.info("memory_hard_deleted", extra={"memory_id": str(memory_id)})
+
+    def erase_personal_memories(self, *, principal: Optional[Principal] = None) -> int:
+        """Right to erasure: permanently delete every personal memory of the
+        principal, including history, evidence and embeddings. Team
+        memories they contributed to remain, as they belong to the team."""
+        who = self._who(principal)
+        self._require(who, Permission.WRITE)
+        with self._uow_factory() as uow:
+            count = uow.memories.hard_delete_personal(who.user_id)
+            audit.record(uow, who, "memory.erase_all", target_type="user", target_id=who.user_id, count=count)
+            uow.commit()
+        logger.info("personal_memories_erased", extra={"count": count})
+        return count
 
     # ------------------------------------------------------------------
     # Version history
     # ------------------------------------------------------------------
-    def list_versions(self, memory_id: UUID) -> list[MemoryVersion]:
+    def list_versions(self, memory_id: UUID, *, principal: Optional[Principal] = None) -> list[MemoryVersion]:
+        who = self._who(principal)
+        self._require(who, Permission.READ)
         with self._uow_factory() as uow:
-            if not uow.memories.exists(memory_id):
-                raise NotFoundError(f"Memory {memory_id} not found")
+            self._visible(uow.memories.get(memory_id), who, memory_id)
             versions = uow.memories.list_versions(memory_id)
             uow.commit()
         return versions
 
-    def get_version(self, memory_id: UUID, version_number: int) -> MemoryVersion:
+    def get_version(
+        self, memory_id: UUID, version_number: int, *, principal: Optional[Principal] = None
+    ) -> MemoryVersion:
+        who = self._who(principal)
+        self._require(who, Permission.READ)
         with self._uow_factory() as uow:
+            memory = self._visible(uow.memories.get(memory_id), who, memory_id)
             version = uow.memories.get_version(memory_id, version_number)
-            memory = None if version is not None else uow.memories.get(memory_id)
             uow.commit()
 
         if version is not None:
             return version
-        if memory is None:
-            raise NotFoundError(f"Memory {memory_id} not found")
         if memory.version != version_number:
             raise NotFoundError(f"Memory {memory_id} has no version {version_number}")
 
@@ -214,4 +346,10 @@ class MemoryService:
             changed_fields=[],
             change_reason="current",
             recorded_at=memory.updated_at,
+            scope=memory.scope,
+            key=memory.key,
+            value=memory.value,
+            origin=memory.origin,
+            pinned=memory.pinned,
+            superseded_by=memory.superseded_by,
         )

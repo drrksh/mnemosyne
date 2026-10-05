@@ -1,5 +1,6 @@
 """
-SQLite/SQLAlchemy implementation of the MemoryRepository port.
+SQLAlchemy implementation of the MemoryRepository port (SQLite and
+PostgreSQL).
 
 Every public method here either returns cleanly or raises one of the
 domain exceptions (NotFoundError, ConflictError, RepositoryError,
@@ -8,10 +9,11 @@ ValidationError) — SQLAlchemy exceptions never leak past this module.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from collections import defaultdict
+from typing import Any, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
@@ -20,9 +22,15 @@ from mnemosyne.domain.dto import FieldChanges, SearchCriteria, SearchResult
 from mnemosyne.domain.entities import Memory, MemoryVersion
 from mnemosyne.domain.enums import MemoryStatus
 from mnemosyne.domain.exceptions import ConflictError, NotFoundError, RepositoryError, ValidationError
-from mnemosyne.repositories.interfaces import MemoryRepository
-from mnemosyne.repositories.sqlite.mappers import memory_to_domain, version_to_domain
-from mnemosyne.repositories.sqlite.orm_models import MemoryORM, MemoryVersionORM, TagORM
+from mnemosyne.domain.principal import Visibility
+from mnemosyne.repositories.interfaces import IndexSignature, MemoryRepository
+from mnemosyne.repositories.sqlite.mappers import aware, memory_from_row, memory_to_domain, version_to_domain
+from mnemosyne.repositories.sqlite.orm_models import (
+    MemoryORM,
+    MemoryVersionORM,
+    TagORM,
+    memory_tags_table,
+)
 from mnemosyne.utils.time import utcnow
 
 logger = logging.getLogger("mnemosyne.repositories.sqlite")
@@ -34,7 +42,31 @@ _SORTABLE_FIELDS = {
     "confidence_score": MemoryORM.confidence_score,
     "importance_score": MemoryORM.importance_score,
     "access_count": MemoryORM.access_count,
+    "reinforcement_count": MemoryORM.reinforcement_count,
 }
+
+#: Domain field name -> ORM attribute name, where they differ.
+_FIELD_TO_COLUMN = {"key": "slot_key", "value": "slot_value", "metadata": "extra_metadata"}
+
+#: Large IN-lists are chunked to stay under SQLite's bound-parameter limit.
+_IN_CHUNK = 500
+
+
+def visibility_clause(visibility: Visibility) -> ColumnElement[bool]:
+    """SQL form of `Principal.can_see`: personal memories of the owner, or
+    any memory belonging to one of the principal's teams."""
+    personal = and_(MemoryORM.owner_id == visibility.owner_id, MemoryORM.team_id.is_(None))
+    if visibility.team_ids:
+        return or_(personal, MemoryORM.team_id.in_(sorted(visibility.team_ids)))
+    return personal
+
+
+def _team_clause(team_id: Optional[str]) -> ColumnElement[bool]:
+    return MemoryORM.team_id.is_(None) if team_id is None else MemoryORM.team_id == team_id
+
+
+def _chunks(items: Sequence[Any], size: int = _IN_CHUNK) -> list[Sequence[Any]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 class SqliteMemoryRepository(MemoryRepository):
@@ -60,6 +92,17 @@ class SqliteMemoryRepository(MemoryRepository):
             access_count=memory.access_count,
             last_accessed_at=memory.last_accessed_at,
             deleted_at=memory.deleted_at,
+            owner_id=memory.owner_id,
+            team_id=memory.team_id,
+            scope=memory.scope,
+            slot_key=memory.key,
+            slot_value=memory.value,
+            fingerprint=memory.fingerprint,
+            origin=memory.origin.value,
+            reinforcement_count=memory.reinforcement_count,
+            last_reinforced_at=memory.last_reinforced_at,
+            pinned=memory.pinned,
+            superseded_by=str(memory.superseded_by) if memory.superseded_by else None,
         )
         orm.tags = self._resolve_tags(memory.tags)
         self._session.add(orm)
@@ -76,6 +119,16 @@ class SqliteMemoryRepository(MemoryRepository):
         orm = self._session.get(MemoryORM, str(memory_id))
         return memory_to_domain(orm) if orm else None
 
+    def get_many(self, memory_ids: Sequence[UUID]) -> list[Memory]:
+        if not memory_ids:
+            return []
+        found: dict[str, Memory] = {}
+        for chunk in _chunks([str(i) for i in memory_ids]):
+            rows = self._session.execute(select(MemoryORM).where(MemoryORM.id.in_(chunk))).scalars()
+            for row in rows:
+                found[row.id] = memory_to_domain(row)
+        return [found[str(i)] for i in memory_ids if str(i) in found]
+
     # ------------------------------------------------------------------
     def update(self, memory_id: UUID, expected_version: int, changes: FieldChanges) -> Memory:
         orm = self._session.get(MemoryORM, str(memory_id))
@@ -90,14 +143,12 @@ class SqliteMemoryRepository(MemoryRepository):
         for key, value in changes.items():
             if key == "tags":
                 orm.tags = self._resolve_tags(value)
-            elif key == "memory_type":
-                orm.memory_type = value.value
-            elif key == "status":
-                orm.status = value.value
-            elif key == "metadata":
-                orm.extra_metadata = value
+            elif key in ("memory_type", "status", "origin"):
+                setattr(orm, key, value.value)
+            elif key == "superseded_by":
+                orm.superseded_by = str(value) if value else None
             else:
-                setattr(orm, key, value)
+                setattr(orm, _FIELD_TO_COLUMN.get(key, key), value)
         orm.updated_at = utcnow()
 
         try:
@@ -112,16 +163,40 @@ class SqliteMemoryRepository(MemoryRepository):
 
     # ------------------------------------------------------------------
     def record_access(self, memory_id: UUID) -> Memory:
-        orm = self._session.get(MemoryORM, str(memory_id))
-        if orm is None:
-            raise NotFoundError(f"Memory {memory_id} not found")
-        orm.access_count += 1
-        orm.last_accessed_at = utcnow()
+        # A Core UPDATE rather than an ORM attribute change: the ORM's
+        # `version_id_col` would otherwise treat a *read* as a new content
+        # revision, leaving holes in version history and making concurrent
+        # readers conflict with writers.
+        now = utcnow()
         try:
-            self._session.flush()
+            result = self._session.execute(
+                update(MemoryORM)
+                .where(MemoryORM.id == str(memory_id))
+                .values(access_count=MemoryORM.access_count + 1, last_accessed_at=now)
+                .execution_options(synchronize_session=False)
+            )
         except SQLAlchemyError as exc:
             raise RepositoryError("Failed to record memory access") from exc
+        if result.rowcount == 0:
+            raise NotFoundError(f"Memory {memory_id} not found")
+        orm = self._session.get(MemoryORM, str(memory_id), populate_existing=True)
+        assert orm is not None
         return memory_to_domain(orm)
+
+    def record_access_many(self, memory_ids: Sequence[UUID]) -> None:
+        if not memory_ids:
+            return
+        now = utcnow()
+        try:
+            for chunk in _chunks([str(i) for i in memory_ids]):
+                self._session.execute(
+                    update(MemoryORM)
+                    .where(MemoryORM.id.in_(chunk))
+                    .values(access_count=MemoryORM.access_count + 1, last_accessed_at=now)
+                    .execution_options(synchronize_session=False)
+                )
+        except SQLAlchemyError as exc:
+            raise RepositoryError("Failed to record memory access") from exc
 
     # ------------------------------------------------------------------
     def add_version(self, version: MemoryVersion) -> None:
@@ -141,8 +216,14 @@ class SqliteMemoryRepository(MemoryRepository):
             metadata_snapshot=dict(version.metadata),
             notes=version.notes,
             changed_fields=list(version.changed_fields),
-            change_reason=version.change_reason,
+            change_reason=(version.change_reason or "")[:100] or None,
             recorded_at=version.recorded_at,
+            scope=version.scope,
+            slot_key=version.key,
+            slot_value=version.value,
+            origin=version.origin.value,
+            pinned=version.pinned,
+            superseded_by=str(version.superseded_by) if version.superseded_by else None,
         )
         self._session.add(orm)
         try:
@@ -186,6 +267,24 @@ class SqliteMemoryRepository(MemoryRepository):
             raise RepositoryError("Failed to permanently delete memory") from exc
         return True
 
+    def hard_delete_personal(self, owner_id: str) -> int:
+        ids = list(
+            self._session.execute(
+                select(MemoryORM.id).where(MemoryORM.owner_id == owner_id, MemoryORM.team_id.is_(None))
+            ).scalars()
+        )
+        try:
+            for chunk in _chunks(ids):
+                # Version/evidence/embedding/tag rows go with their memory
+                # via ON DELETE CASCADE.
+                self._session.execute(
+                    delete(MemoryORM).where(MemoryORM.id.in_(chunk)).execution_options(synchronize_session=False)
+                )
+            self._session.expire_all()
+        except SQLAlchemyError as exc:
+            raise RepositoryError("Failed to erase memories") from exc
+        return len(ids)
+
     # ------------------------------------------------------------------
     def exists(self, memory_id: UUID) -> bool:
         stmt = select(MemoryORM.id).where(MemoryORM.id == str(memory_id))
@@ -200,6 +299,9 @@ class SqliteMemoryRepository(MemoryRepository):
 
         stmt = select(MemoryORM)
 
+        if criteria.visibility is not None:
+            stmt = stmt.where(visibility_clause(criteria.visibility))
+
         if criteria.statuses:
             stmt = stmt.where(MemoryORM.status.in_([s.value for s in criteria.statuses]))
         else:
@@ -210,6 +312,16 @@ class SqliteMemoryRepository(MemoryRepository):
 
         if criteria.memory_types:
             stmt = stmt.where(MemoryORM.memory_type.in_([t.value for t in criteria.memory_types]))
+        if criteria.scopes:
+            stmt = stmt.where(MemoryORM.scope.in_(criteria.scopes))
+        if criteria.origins:
+            stmt = stmt.where(MemoryORM.origin.in_([o.value for o in criteria.origins]))
+        if criteria.keys:
+            stmt = stmt.where(MemoryORM.slot_key.in_(criteria.keys))
+        if criteria.pinned is not None:
+            stmt = stmt.where(MemoryORM.pinned.is_(criteria.pinned))
+        if criteria.team_id is not None:
+            stmt = stmt.where(MemoryORM.team_id == criteria.team_id)
 
         if criteria.query:
             like = f"%{criteria.query}%"
@@ -262,13 +374,75 @@ class SqliteMemoryRepository(MemoryRepository):
         total = self._session.execute(count_stmt).scalar_one()
 
         sort_column = _SORTABLE_FIELDS[criteria.sort_by]
-        stmt = stmt.order_by(sort_column.desc() if criteria.sort_desc else sort_column.asc())
+        stmt = stmt.order_by(
+            sort_column.desc() if criteria.sort_desc else sort_column.asc(),
+            MemoryORM.id.asc(),  # deterministic order across equal sort keys
+        )
         stmt = stmt.offset((criteria.page - 1) * criteria.page_size).limit(criteria.page_size)
 
         rows = self._session.execute(stmt).scalars().all()
         items = [memory_to_domain(row) for row in rows]
 
         return SearchResult(items=items, total=total, page=criteria.page, page_size=criteria.page_size)
+
+    # ------------------------------------------------------------------
+    # Retrieval / consolidation support
+    # ------------------------------------------------------------------
+    def list_for_index(
+        self, visibility: Visibility, statuses: Sequence[MemoryStatus] = (MemoryStatus.ACTIVE,)
+    ) -> list[Memory]:
+        table = MemoryORM.__table__
+        stmt = select(table).where(
+            visibility_clause(visibility), table.c.status.in_([s.value for s in statuses])
+        )
+        try:
+            rows = self._session.execute(stmt).mappings().all()
+            ids = [row["id"] for row in rows]
+            tags_by_id: dict[str, list[str]] = defaultdict(list)
+            for chunk in _chunks(ids):
+                tag_rows = self._session.execute(
+                    select(memory_tags_table.c.memory_id, TagORM.name)
+                    .join(TagORM, TagORM.id == memory_tags_table.c.tag_id)
+                    .where(memory_tags_table.c.memory_id.in_(chunk))
+                )
+                for memory_id, name in tag_rows:
+                    tags_by_id[memory_id].append(name)
+        except SQLAlchemyError as exc:
+            raise RepositoryError("Failed to load memories for indexing") from exc
+        return [memory_from_row(row, tags_by_id.get(row["id"], [])) for row in rows]
+
+    def index_signature(self, visibility: Visibility) -> IndexSignature:
+        stmt = select(
+            func.count(MemoryORM.id), func.max(MemoryORM.updated_at), func.coalesce(func.sum(MemoryORM.version), 0)
+        ).where(visibility_clause(visibility), MemoryORM.status == MemoryStatus.ACTIVE.value)
+        count, max_updated, version_sum = self._session.execute(stmt).one()
+        return IndexSignature(count=int(count), max_updated_at=aware(max_updated), version_sum=int(version_sum))
+
+    def find_slot(self, *, owner_id: str, team_id: Optional[str], scope: str, key: str) -> list[Memory]:
+        stmt = select(MemoryORM).where(
+            MemoryORM.slot_key == key,
+            MemoryORM.scope == scope,
+            MemoryORM.status == MemoryStatus.ACTIVE.value,
+            _team_clause(team_id),
+        )
+        if team_id is None:
+            stmt = stmt.where(MemoryORM.owner_id == owner_id)
+        rows = self._session.execute(stmt.order_by(MemoryORM.updated_at.desc())).scalars().all()
+        return [memory_to_domain(row) for row in rows]
+
+    def find_by_fingerprint(
+        self, *, owner_id: str, team_id: Optional[str], scope: str, fingerprint: str
+    ) -> list[Memory]:
+        stmt = select(MemoryORM).where(
+            MemoryORM.fingerprint == fingerprint,
+            MemoryORM.scope == scope,
+            MemoryORM.status == MemoryStatus.ACTIVE.value,
+            _team_clause(team_id),
+        )
+        if team_id is None:
+            stmt = stmt.where(MemoryORM.owner_id == owner_id)
+        rows = self._session.execute(stmt).scalars().all()
+        return [memory_to_domain(row) for row in rows]
 
     # ------------------------------------------------------------------
     def _resolve_tags(self, tag_names: list[str]) -> list[TagORM]:

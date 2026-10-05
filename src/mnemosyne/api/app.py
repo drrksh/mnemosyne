@@ -20,14 +20,12 @@ from fastapi import FastAPI, Request, Response
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from mnemosyne import __version__
 from mnemosyne.api.error_handlers import register_exception_handlers
 from mnemosyne.api.routers.memories import router as memories_router
 from mnemosyne.config import Settings, get_settings
-from mnemosyne.core.memory_engine import EngineLimits, MemoryEngine
-from mnemosyne.db.session import create_engine_from_settings, create_session_factory
-from mnemosyne.db.unit_of_work import UnitOfWork
+from mnemosyne.container import Mnemosyne
 from mnemosyne.logging_config import configure_logging, get_request_id, set_request_id
-from mnemosyne.services.memory_service import MemoryService
 
 logger = logging.getLogger("mnemosyne.api")
 
@@ -61,22 +59,16 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def create_app(settings: Optional[Settings] = None) -> FastAPI:
-    settings = settings or get_settings()
-    configure_logging(settings)
-
-    engine = create_engine_from_settings(settings)
-    session_factory = create_session_factory(engine)
-    memory_engine = MemoryEngine(
-        EngineLimits(
-            max_title_length=settings.max_title_length,
-            max_summary_length=settings.max_summary_length,
-            max_tags_per_memory=settings.max_tags_per_memory,
-            max_tag_length=settings.max_tag_length,
-            max_metadata_bytes=settings.max_metadata_bytes,
-        )
-    )
-    memory_service = MemoryService(uow_factory=lambda: UnitOfWork(session_factory), engine=memory_engine)
+def create_app(settings: Optional[Settings] = None, *, container: Optional[Mnemosyne] = None) -> FastAPI:
+    if container is None:
+        settings = settings or get_settings()
+        configure_logging(settings)
+        container = Mnemosyne(settings)
+    else:
+        settings = container.settings
+        configure_logging(settings)
+    engine = container.db_engine
+    session_factory = container.session_factory
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -86,15 +78,20 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         logger.info("mnemosyne_stopped")
 
     app = FastAPI(
-        title="Mnemosyne Local Memory Engine",
-        description="Phase 1: a storage-agnostic, versioned memory store for an Adaptive Context Engine.",
-        version="0.1.0",
+        title="Mnemosyne",
+        description=(
+            "A persistent, adaptive engineering memory for AI coding assistants: it learns how a "
+            "developer works and hands the right context to any model, so nobody has to re-explain "
+            "themselves."
+        ),
+        version=__version__,
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.state.container = container
     app.state.engine = engine
     app.state.session_factory = session_factory
-    app.state.memory_service = memory_service
+    app.state.memory_service = container.memories
 
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)

@@ -165,8 +165,8 @@ def test_search_excludes_deleted_by_default(uow_factory, memory_engine, new_memo
 
 def test_search_filters_by_memory_type(uow_factory, memory_engine, new_memory_factory):
     with uow_factory() as uow:
-        uow.memories.add(memory_engine.build_new_memory(new_memory_factory(title="A fact", memory_type=MemoryType.FACT)))
-        uow.memories.add(memory_engine.build_new_memory(new_memory_factory(title="A goal", memory_type=MemoryType.GOAL)))
+        for title, memory_type in (("A fact", MemoryType.FACT), ("A goal", MemoryType.GOAL)):
+            uow.memories.add(memory_engine.build_new_memory(new_memory_factory(title=title, memory_type=memory_type)))
         uow.commit()
 
     with uow_factory() as uow:

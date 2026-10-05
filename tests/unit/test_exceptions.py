@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from mnemosyne.domain.exceptions import (
-    ConflictError,
     ConfigurationError,
+    ConflictError,
     MnemosyneError,
     NotFoundError,
     RepositoryError,
