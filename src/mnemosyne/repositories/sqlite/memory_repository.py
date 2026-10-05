@@ -24,7 +24,13 @@ from mnemosyne.domain.enums import MemoryStatus
 from mnemosyne.domain.exceptions import ConflictError, NotFoundError, RepositoryError, ValidationError
 from mnemosyne.domain.principal import Visibility
 from mnemosyne.repositories.interfaces import IndexSignature, MemoryRepository
-from mnemosyne.repositories.sqlite.mappers import aware, memory_from_row, memory_to_domain, version_to_domain
+from mnemosyne.repositories.sqlite.mappers import (
+    affected_rows,
+    aware,
+    memory_from_row,
+    memory_to_domain,
+    version_to_domain,
+)
 from mnemosyne.repositories.sqlite.orm_models import (
     MemoryORM,
     MemoryVersionORM,
@@ -178,7 +184,7 @@ class SqliteMemoryRepository(MemoryRepository):
             )
         except SQLAlchemyError as exc:
             raise RepositoryError("Failed to update memory dynamics") from exc
-        if result.rowcount == 0:
+        if affected_rows(result) == 0:
             raise NotFoundError(f"Memory {memory_id} not found")
         orm = self._session.get(MemoryORM, str(memory_id), populate_existing=True)
         assert orm is not None
@@ -200,7 +206,7 @@ class SqliteMemoryRepository(MemoryRepository):
             )
         except SQLAlchemyError as exc:
             raise RepositoryError("Failed to record memory access") from exc
-        if result.rowcount == 0:
+        if affected_rows(result) == 0:
             raise NotFoundError(f"Memory {memory_id} not found")
         orm = self._session.get(MemoryORM, str(memory_id), populate_existing=True)
         assert orm is not None

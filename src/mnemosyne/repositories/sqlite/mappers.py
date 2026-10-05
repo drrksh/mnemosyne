@@ -9,8 +9,10 @@ every call site that touches a memory.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, cast
 from uuid import UUID
+
+from sqlalchemy import CursorResult, Result
 
 from mnemosyne.domain.entities import (
     ApiKey,
@@ -33,6 +35,12 @@ from mnemosyne.repositories.sqlite.orm_models import (
     TeamORM,
     UserORM,
 )
+
+
+def affected_rows(result: Result[Any]) -> int:
+    """Rows matched by an UPDATE/DELETE. `Session.execute` is typed as
+    returning `Result`, but for DML it returns a `CursorResult`."""
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 def aware(value: Optional[datetime]) -> Optional[datetime]:
@@ -82,7 +90,7 @@ def memory_to_domain(orm: MemoryORM) -> Memory:
     )
 
 
-def memory_from_row(row: Mapping[str, Any], tags: list[str]) -> Memory:
+def memory_from_row(row: Mapping[Any, Any], tags: list[str]) -> Memory:
     """Build a Memory from a Core result row (no ORM identity map). Used
     by the retrieval index loader, which reads thousands of rows."""
     return Memory(

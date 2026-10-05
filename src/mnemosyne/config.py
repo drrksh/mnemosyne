@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -203,7 +203,12 @@ def config_files() -> tuple[Path, ...]:
 
 def load_settings() -> Settings:
     """Fresh Settings from the environment and the files in `config_files()`."""
-    return Settings(_env_file=config_files())
+    # pydantic-settings accepts `_env_file` at instantiation, but type checkers
+    # synthesise Settings.__init__ from its fields (dataclass_transform) and
+    # do not see it; calling through a plain callable keeps the call checked
+    # for its return type without a version-dependent ignore.
+    build: Callable[..., Settings] = Settings
+    return build(_env_file=config_files())
 
 
 @lru_cache

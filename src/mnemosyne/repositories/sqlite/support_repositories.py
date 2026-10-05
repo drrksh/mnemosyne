@@ -5,10 +5,10 @@ evidence, embeddings, identity (users / teams / API keys) and audit.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence, cast
 from uuid import UUID
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import Table, delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from mnemosyne.repositories.interfaces import (
     StoredEmbedding,
 )
 from mnemosyne.repositories.sqlite.mappers import (
+    affected_rows,
     api_key_to_domain,
     audit_to_domain,
     evidence_to_domain,
@@ -146,7 +147,7 @@ class SqlEmbeddingRepository(EmbeddingRepository):
         if not embeddings:
             return
         now = utcnow()
-        table = MemoryEmbeddingORM.__table__
+        table = cast(Table, MemoryEmbeddingORM.__table__)  # declarative models always map a Table
         try:
             for start in range(0, len(embeddings), _IN_CHUNK):
                 chunk = embeddings[start : start + _IN_CHUNK]
@@ -176,7 +177,7 @@ class SqlEmbeddingRepository(EmbeddingRepository):
     def get_many(self, memory_ids: Sequence[UUID], *, model: str) -> dict[UUID, StoredEmbedding]:
         out: dict[UUID, StoredEmbedding] = {}
         ids = [str(i) for i in memory_ids]
-        table = MemoryEmbeddingORM.__table__
+        table = cast(Table, MemoryEmbeddingORM.__table__)  # declarative models always map a Table
         for start in range(0, len(ids), _IN_CHUNK):
             chunk = ids[start : start + _IN_CHUNK]
             rows = self._session.execute(
@@ -197,7 +198,7 @@ class SqlEmbeddingRepository(EmbeddingRepository):
 
     def delete_other_models(self, *, keep_model: str) -> int:
         result = self._session.execute(delete(MemoryEmbeddingORM).where(MemoryEmbeddingORM.model != keep_model))
-        return int(result.rowcount or 0)
+        return affected_rows(result)
 
 
 class SqlIdentityRepository(IdentityRepository):
@@ -276,7 +277,7 @@ class SqlIdentityRepository(IdentityRepository):
         result = self._session.execute(
             delete(TeamMemberORM).where(TeamMemberORM.team_id == team_id, TeamMemberORM.user_id == user_id)
         )
-        return bool(result.rowcount)
+        return affected_rows(result) > 0
 
     def memberships_for_user(self, user_id: str) -> list[TeamMembership]:
         rows = self._session.execute(select(TeamMemberORM).where(TeamMemberORM.user_id == user_id)).scalars()
@@ -325,7 +326,7 @@ class SqlIdentityRepository(IdentityRepository):
         result = self._session.execute(
             update(ApiKeyORM).where(ApiKeyORM.id == key_id, ApiKeyORM.revoked_at.is_(None)).values(revoked_at=when)
         )
-        return bool(result.rowcount)
+        return affected_rows(result) > 0
 
 
 class SqlAuditRepository(AuditRepository):
