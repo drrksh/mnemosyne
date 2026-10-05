@@ -78,7 +78,7 @@ class IngestResponse(BaseModel):
     outcomes: list[OutcomeModel]
 
     @classmethod
-    def from_report(cls, report: IngestReport) -> "IngestResponse":
+    def from_report(cls, report: IngestReport) -> IngestResponse:
         return cls(
             summary=report.summary_line(),
             counts=report.counts,
@@ -122,7 +122,7 @@ class ConversationRequest(BaseModel):
     use_llm: bool = False
 
     @model_validator(mode="after")
-    def _one_source(self) -> "ConversationRequest":
+    def _one_source(self) -> ConversationRequest:
         if (self.transcript is None) == (self.messages is None):
             raise ValueError("provide exactly one of 'transcript' or 'messages'")
         return self

@@ -31,8 +31,8 @@ from mnemosyne.retrieval.ranker import HybridRanker, RankingWeights
 from mnemosyne.services.context_service import ContextService
 from mnemosyne.services.identity_service import IdentityService
 from mnemosyne.services.learning_service import LearningService, LearningSettings
-from mnemosyne.services.portability_service import PortabilityService
 from mnemosyne.services.memory_service import MemoryService
+from mnemosyne.services.portability_service import PortabilityService
 from mnemosyne.services.retrieval_service import RetrievalService
 
 logger = logging.getLogger("mnemosyne.container")

@@ -53,6 +53,9 @@ DEFAULT_REINFORCEMENT_RATES: dict[MemoryOrigin, float] = {
 }
 
 
+#: Skip reason when an evidence reference was already ingested (idempotent re-runs).
+ALREADY_RECORDED = "observation already recorded"
+
 @dataclass(frozen=True)
 class ConsolidationPolicy:
     near_duplicate_threshold: float = 0.92
@@ -149,7 +152,7 @@ class Consolidator:
         seen = known_refs.get(existing.id, set())
         new_refs = [r for r in refs if r not in seen]
         if refs and not new_refs:
-            return Decision(IngestAction.SKIPPED, "observation already recorded", target=existing)
+            return Decision(IngestAction.SKIPPED, ALREADY_RECORDED, target=existing)
 
         independent = 1 if new_refs or not refs else 0
         changes: dict[str, Any] = {

@@ -41,7 +41,8 @@ _REPO_MARKER = re.compile(
 )
 _TRANSIENT = re.compile(
     r"\b(?:that|these|those|it|now|today|yet|above|below|this time|for now|right now|"
-    r"this (?:file|function|method|class|line|test|change|pr|bug|error|one|component|module|step|code|part))\b",
+    r"this (?:file|function|method|class|line|test|change|pr|bug|error|one|component|module|step|code|part|task|"
+    r"ticket|issue|example|case|run|query|script|command|time|branch))\b",
     re.IGNORECASE,
 )
 _LEADING_REPO = re.compile(
@@ -102,6 +103,10 @@ RULES: tuple[Rule, ...] = (
 
 _INSTEAD = _r(r"\b(?:use|prefer|want)\s+(?P<new>[\w.+#@/-]+(?:\s[\w.+#@/-]+)?)\s+(?:instead of|rather than|over)\s+"
               r"(?P<old>[\w.+#@/-]+(?:\s[\w.+#@/-]+)?)")
+#: "use pnpm, not npm" / "use ruff, never flake8": only for known tools,
+#: since without "instead of" the phrasing is too loose for free text.
+_USE_NOT = _r(r"^(?:please\s+)?(?:always\s+)?(?:use|prefer|want)\s+(?P<new>[\w.+#@/-]+(?:\s[\w.+#@/-]+)?)\s*[,;:-]?\s*"
+              r"(?:not|never|and not|but not|and never|no)\s+(?P<old>[\w.+#@/-]+(?:\s[\w.+#@/-]+)?)")
 _DECISION = _r(r"\b(?:let's|let us|we(?:'ll| will)|I(?:'ve| have)? decided to|we(?:'ve| have)? decided to|"
                r"decided to|we're going to|we are going to)\s+(?:go with|use|switch to|stick with|adopt|move to|"
                r"migrate to)\s+(?P<what>.+?)\s+(?:because|since|so that|as)\s+(?P<why>.+)$")
@@ -241,6 +246,8 @@ def _match_core(sentence: str) -> Optional[_Match]:
                       key=f"skill.{short_hash(topic.lower(), 8)}", value="experienced", scope_hint="global")
 
     if match := _INSTEAD.search(sentence):
+        if _is_transient(sentence[match.start("old"):]):
+            return None  # "use yarn instead of npm in this file" is about the task at hand
         new_tool = match_tool_prefix(match.group("new"))
         old_tool = match_tool_prefix(match.group("old"))
         if new_tool and new_tool.slot_key:
@@ -250,6 +257,13 @@ def _match_core(sentence: str) -> Optional[_Match]:
         body = _clean_body(match.group(0))
         if not _is_transient(body):
             return _Match("instead", _capitalize(body), sentence, MemoryType.PREFERENCE, C, 0.75, 0.6)
+
+    if match := _USE_NOT.search(sentence):
+        new_tool = match_tool_prefix(match.group("new"))
+        old_tool = match_tool_prefix(match.group("old"))
+        if new_tool and new_tool.slot_key and old_tool and not _is_transient(sentence[match.start("old"):]):
+            return _Match("instead", f"Prefers {new_tool.label} over {old_tool.label}", sentence, MemoryType.TOOLING,
+                          C, 0.8, 0.65, key=new_tool.slot_key, value=new_tool.name, tool=new_tool)
 
     if match := _DECISION.search(sentence):
         what, why = _clean_body(match.group("what")), _clean_body(match.group("why"))

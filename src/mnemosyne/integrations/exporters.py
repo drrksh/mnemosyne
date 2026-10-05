@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from mnemosyne.context.render import RenderPlan, render_markdown
 from mnemosyne.domain.principal import Principal
+from mnemosyne.domain.working_context import WorkingContext
 from mnemosyne.learning.workspace import detect_repo, detect_working_context
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -97,13 +98,14 @@ def _atomic_write(path: Path, text: str) -> None:
 
 def build_profile_markdown(
     container: Mnemosyne,
-    repo_path: Path,
+    context: WorkingContext,
     *,
     audience: Audience = "repo",
     principal: Optional[Principal] = None,
     max_tokens: int = 3000,
 ) -> tuple[str, int]:
-    context = detect_working_context(repo_path)
+    """The rule-file body for a working context, and how many memories it
+    holds. Also served by `GET /api/v1/rules` for team deployments."""
     pack = container.context.profile(context, principal=principal, max_tokens=max_tokens)
     items = pack.items
     if audience == "repo":
@@ -116,23 +118,25 @@ def build_profile_markdown(
     return body, len(items)
 
 
-def export(
-    container: Mnemosyne,
-    repo_path: str | Path,
+def repository_root(repo_path: str | Path) -> Path:
+    repo = detect_repo(Path(repo_path))
+    return (repo.root if repo else Path(repo_path)).resolve()
+
+
+def write_rule_files(
+    root: Path,
+    body: str,
+    items: int,
     *,
     targets: list[str],
-    audience: Audience = "repo",
-    principal: Optional[Principal] = None,
     dry_run: bool = False,
 ) -> list[ExportResult]:
+    """Write `body` into each target's file under `root`: a managed block
+    inside shared files, the whole file for files Mnemosyne owns."""
     unknown = [t for t in targets if t not in TARGETS]
     if unknown:
         raise ValueError(f"unknown export targets {unknown}; choose from {sorted(TARGETS)}")
-    repo = detect_repo(Path(repo_path))
-    root = (repo.root if repo else Path(repo_path)).resolve()
-    body, count = build_profile_markdown(container, root, audience=audience, principal=principal)
     block = f"{BEGIN}\n{body.rstrip()}\n{END}"
-
     results = []
     for name in targets:
         target = TARGETS[name]
@@ -147,5 +151,20 @@ def export(
             action = "updated" if existing else "created"
             if not dry_run:
                 _atomic_write(path, new)
-        results.append(ExportResult(name, path, action, count))
+        results.append(ExportResult(name, path, action, items))
     return results
+
+
+def export(
+    container: Mnemosyne,
+    repo_path: str | Path,
+    *,
+    targets: list[str],
+    audience: Audience = "repo",
+    principal: Optional[Principal] = None,
+    dry_run: bool = False,
+) -> list[ExportResult]:
+    root = repository_root(repo_path)
+    body, count = build_profile_markdown(container, detect_working_context(root), audience=audience,
+                                         principal=principal)
+    return write_rule_files(root, body, count, targets=targets, dry_run=dry_run)

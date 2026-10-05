@@ -126,6 +126,11 @@ class MemoryRepository(ABC):
         """See `IndexSignature`."""
 
     @abstractmethod
+    def counts(self, visibility: Visibility) -> list[tuple[str, str, str, str, int]]:
+        """(status, memory_type, origin, scope, count) groups over every
+        memory the visibility can see."""
+
+    @abstractmethod
     def find_slot(
         self, *, owner_id: str, team_id: Optional[str], scope: str, key: str
     ) -> list[Memory]:

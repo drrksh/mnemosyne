@@ -183,10 +183,16 @@ class Settings(BaseSettings):
         self.logs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
+def load_settings() -> Settings:
+    """Fresh Settings from the environment, `<home>/config.env` and `.env`
+    (later sources win)."""
+    home = default_home()
+    return Settings(_env_file=(home / "config.env", ".env"))
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Process-wide cached Settings instance. Tests should construct
     `Settings(...)` directly with explicit overrides rather than
     mutating this cached singleton."""
-    home = default_home()
-    return Settings(_env_file=(home / "config.env", ".env"))
+    return load_settings()

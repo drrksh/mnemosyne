@@ -47,7 +47,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     """Correlation id, structured start/finish logs, metrics, and a cap on
     request size."""
 
-    def __init__(self, app, *, metrics: Metrics, max_request_bytes: int) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, app, *, metrics: Metrics, max_request_bytes: int) -> None:
         super().__init__(app)
         self._metrics = metrics
         self._max_bytes = max_request_bytes
@@ -158,7 +158,7 @@ def create_app(settings: Optional[Settings] = None, *, container: Optional[Mnemo
     def readiness() -> JSONResponse:
         """Readiness: the schema is at the expected migration revision."""
         try:
-            current, head = migrate.current_revision(engine), migrate.head_revision()
+            current, head = migrate.current_revision(engine), migrate.HEAD_REVISION
         except Exception:  # pragma: no cover - defensive
             logger.exception("readiness_check_failed")
             return JSONResponse(status_code=503, content={"ready": False, "reason": "database unavailable"})

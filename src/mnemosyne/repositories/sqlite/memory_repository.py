@@ -441,6 +441,14 @@ class SqliteMemoryRepository(MemoryRepository):
         count, max_updated, version_sum = self._session.execute(stmt).one()
         return IndexSignature(count=int(count), max_updated_at=aware(max_updated), version_sum=int(version_sum))
 
+    def counts(self, visibility: Visibility) -> list[tuple[str, str, str, str, int]]:
+        stmt = (
+            select(MemoryORM.status, MemoryORM.memory_type, MemoryORM.origin, MemoryORM.scope, func.count(MemoryORM.id))
+            .where(visibility_clause(visibility))
+            .group_by(MemoryORM.status, MemoryORM.memory_type, MemoryORM.origin, MemoryORM.scope)
+        )
+        return [(str(a), str(b), str(c), str(d), int(n)) for a, b, c, d, n in self._session.execute(stmt).all()]
+
     def find_slot(self, *, owner_id: str, team_id: Optional[str], scope: str, key: str) -> list[Memory]:
         stmt = select(MemoryORM).where(
             MemoryORM.slot_key == key,

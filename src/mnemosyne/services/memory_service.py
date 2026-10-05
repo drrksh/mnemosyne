@@ -14,7 +14,8 @@ found*, never as *forbidden*, so the API does not leak which ids exist.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from collections import Counter
+from typing import Any, Callable, Optional
 from uuid import UUID
 
 from mnemosyne.core.memory_engine import MemoryEngine, UpdatePlan
@@ -166,6 +167,32 @@ class MemoryService:
             evidence = uow.evidence.list_for_memory(memory_id, limit=limit)
             uow.commit()
         return evidence
+
+    def stats(self, *, principal: Optional[Principal] = None) -> dict[str, Any]:
+        """What the principal's memory holds, by status, type, origin and
+        scope (repositories and languages are listed individually)."""
+        who = self._who(principal)
+        self._require(who, Permission.READ)
+        with self._uow_factory() as uow:
+            groups = uow.memories.counts(who.visibility)
+            uow.commit()
+        by_status: Counter[str] = Counter()
+        by_type: Counter[str] = Counter()
+        by_origin: Counter[str] = Counter()
+        by_scope: Counter[str] = Counter()
+        for status, memory_type, origin, scope, count in groups:
+            by_status[status] += count
+            if status == MemoryStatus.ACTIVE.value:
+                by_type[memory_type] += count
+                by_origin[origin] += count
+                by_scope[scope] += count
+        return {
+            "active": by_status.get(MemoryStatus.ACTIVE.value, 0),
+            "by_status": dict(by_status.most_common()),
+            "by_type": dict(by_type.most_common()),
+            "by_origin": dict(by_origin.most_common()),
+            "by_scope": dict(by_scope.most_common()),
+        }
 
     # ------------------------------------------------------------------
     # Update

@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from mnemosyne.api.observability import RateLimitedError
 from mnemosyne.domain.exceptions import (
     AuthenticationError,
     ConfigurationError,
@@ -24,7 +25,6 @@ from mnemosyne.domain.exceptions import (
     RepositoryError,
     ValidationError,
 )
-from mnemosyne.api.observability import RateLimitedError
 from mnemosyne.logging_config import get_request_id
 
 logger = logging.getLogger("mnemosyne.api.errors")

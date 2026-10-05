@@ -132,6 +132,8 @@ def get_profile(
     principal: Principal = Depends(get_principal),
 ) -> ContextResponse:
     """The developer's standing profile for a working context."""
+    if not principal.has(Permission.READ):
+        raise PermissionDeniedError("this credential lacks the 'memories:read' permission")
     pack = container.context.profile(
         WorkingContext.create(repo_id=repo_id, languages=language or []), principal=principal,
         max_tokens=max(50, min(max_tokens, 16_000)), fmt=format,
@@ -143,6 +145,31 @@ def get_profile(
                                 scope=i.memory.scope, section=i.section, reason=i.reason, score=round(i.score, 4))
                for i in pack.items],
     )
+
+
+class RulesResponse(BaseModel):
+    markdown: str
+    items: int
+    repo_id: Optional[str]
+
+
+@router.get("/rules", response_model=RulesResponse)
+def get_rules(
+    repo_id: Optional[str] = None,
+    language: Optional[list[str]] = None,
+    audience: Literal["repo", "personal"] = "repo",
+    container: Mnemosyne = Depends(get_container),
+    principal: Principal = Depends(get_principal),
+) -> RulesResponse:
+    """The body Mnemosyne writes into CLAUDE.md, AGENTS.md and other rule
+    files, so `mnemosyne sync` works the same against a team server."""
+    from mnemosyne.integrations.exporters import build_profile_markdown
+
+    if not principal.has(Permission.READ):
+        raise PermissionDeniedError("this credential lacks the 'memories:read' permission")
+    context = WorkingContext.create(repo_id=repo_id, languages=language or [])
+    markdown, count = build_profile_markdown(container, context, audience=audience, principal=principal)
+    return RulesResponse(markdown=markdown, items=count, repo_id=context.repo_id)
 
 
 class RecallRequestModel(BaseModel):

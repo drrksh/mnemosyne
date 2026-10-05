@@ -57,7 +57,8 @@ class Metrics:
                 cumulative = 0
                 for bound, count in zip(LATENCY_BUCKETS, buckets, strict=False):
                     cumulative += count
-                    lines.append(f'mnemosyne_http_request_duration_seconds_bucket{{{labels},le="{bound}"}} {cumulative}')
+                    bucket = f'{labels},le="{bound}"'
+                    lines.append(f"mnemosyne_http_request_duration_seconds_bucket{{{bucket}}} {cumulative}")
                 cumulative += buckets[-1]
                 lines.append(f'mnemosyne_http_request_duration_seconds_bucket{{{labels},le="+Inf"}} {cumulative}')
                 lines.append(f"mnemosyne_http_request_duration_seconds_count{{{labels}}} {cumulative}")

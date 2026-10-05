@@ -157,3 +157,9 @@ def test_phase1_database_upgrades_in_place_preserving_memories(tmp_path):
         ).one()
     engine.dispose()
     assert row == ("Old memory", "local", None, "global", "explicit", 1, 0)
+
+
+def test_pinned_head_revision_matches_migration_files():
+    """`HEAD_REVISION` lets every process check the schema without importing
+    Alembic; adding a migration must update it."""
+    assert migrate.head_revision() == migrate.HEAD_REVISION

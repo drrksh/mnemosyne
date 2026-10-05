@@ -43,6 +43,13 @@ def me(container: Mnemosyne = Depends(get_container), principal: Principal = Dep
     )
 
 
+@router.get("/me/stats")
+def memory_stats(container: Mnemosyne = Depends(get_container),
+                 principal: Principal = Depends(get_principal)) -> dict[str, Any]:
+    """Counts of the memories visible to the caller by status, type, origin and scope."""
+    return container.memories.stats(principal=principal)
+
+
 @router.get("/me/export")
 def export_memories(
     include_archived: bool = False,
@@ -89,7 +96,7 @@ class KeyResponse(BaseModel):
     key: Optional[str] = Field(default=None, description="The secret. Returned once, at creation only.")
 
     @classmethod
-    def from_domain(cls, key: ApiKey, plaintext: Optional[str] = None) -> "KeyResponse":
+    def from_domain(cls, key: ApiKey, plaintext: Optional[str] = None) -> KeyResponse:
         return cls(id=key.id, name=key.name, prefix=key.prefix, scopes=key.scopes, created_at=key.created_at,
                    last_used_at=key.last_used_at, expires_at=key.expires_at, revoked_at=key.revoked_at, key=plaintext)
 
@@ -172,7 +179,7 @@ class UserResponse(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_domain(cls, user: User) -> "UserResponse":
+    def from_domain(cls, user: User) -> UserResponse:
         return cls(id=user.id, handle=user.handle, display_name=user.display_name, is_admin=user.is_admin,
                    disabled=user.disabled, created_at=user.created_at)
 
