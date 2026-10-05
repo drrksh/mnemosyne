@@ -59,8 +59,16 @@ def _format_memory(memory: dict[str, Any], score: Optional[float] = None) -> str
     return line
 
 
+class MnemosyneMCP(FastMCP[Any]):
+    """FastMCP that owns the backend its tools use, and closes it."""
+
+    def __init__(self, *, close_backend: Callable[[], None], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.close_backend = close_backend
+
+
 def build_server(settings: Settings, backend_factory: Optional[Callable[[], Backend]] = None,
-                 *, default_cwd: Optional[str] = None) -> FastMCP:
+                 *, default_cwd: Optional[str] = None) -> MnemosyneMCP:
     from mnemosyne.client.backend import open_backend
 
     factory = backend_factory or (lambda: open_backend(settings))
@@ -76,7 +84,11 @@ def build_server(settings: Settings, backend_factory: Optional[Callable[[], Back
     def where(cwd: Optional[str]) -> str:
         return cwd or default_cwd or os.getcwd()
 
-    server = FastMCP("mnemosyne", instructions=INSTRUCTIONS, log_level="WARNING")
+    def close() -> None:
+        if "b" in holder:
+            holder.pop("b").close()
+
+    server = MnemosyneMCP(name="mnemosyne", instructions=INSTRUCTIONS, log_level="WARNING", close_backend=close)
 
     @server.tool(annotations=ToolAnnotations(title="Get context for a task", readOnlyHint=True, openWorldHint=False))
     def get_context(task: str, cwd: Optional[str] = None, file_path: Optional[str] = None,
@@ -178,7 +190,6 @@ def build_server(settings: Settings, backend_factory: Optional[Callable[[], Back
                                    record_access=False)
         return result.text or "No profile yet."
 
-    server._mnemosyne_close = lambda: holder["b"].close() if "b" in holder else None
     return server
 
 
@@ -187,4 +198,4 @@ def run_stdio(settings: Settings) -> None:  # pragma: no cover - exercised end-t
     try:
         server.run("stdio")
     finally:
-        server._mnemosyne_close()
+        server.close_backend()
