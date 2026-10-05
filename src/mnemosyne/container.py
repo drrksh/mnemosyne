@@ -28,6 +28,7 @@ from mnemosyne.retrieval.embeddings import Embedder, build_embedder
 from mnemosyne.retrieval.index import DiskIndexCache, IndexCache
 from mnemosyne.retrieval.indexer import MemoryIndexer
 from mnemosyne.retrieval.ranker import HybridRanker, RankingWeights
+from mnemosyne.services.context_service import ContextService
 from mnemosyne.services.identity_service import IdentityService
 from mnemosyne.services.learning_service import LearningService, LearningSettings
 from mnemosyne.services.memory_service import MemoryService
@@ -83,6 +84,11 @@ class Mnemosyne:
             self.index_cache,
             default_principal=self.default_principal,
             disk_cache=disk_cache,
+        )
+        self.context = ContextService(
+            self.retrieval,
+            profile_share=self.settings.context_profile_share,
+            default_principal=self.default_principal,
         )
         self.learning = LearningService(
             self.uow_factory,

@@ -225,3 +225,72 @@ def format_report(reports: Sequence[EvaluationReport]) -> str:
 
 
 __all__ = ["VARIANTS", "EvaluationReport", "evaluate", "format_report", "replace"]
+
+
+# ----------------------------------------------------------------------
+# End-to-end: what actually reaches the model
+# ----------------------------------------------------------------------
+@dataclass
+class ContextEvaluation:
+    max_tokens: int
+    coverage_essential: float = 0.0  # grade-3 labels present in the compiled context
+    coverage_relevant: float = 0.0  # grade >= 2 labels present
+    noise_rate: float = 0.0  # share of included memories that are unlabeled haystack
+    leakage: float = 0.0  # share of queries including another repository's memories
+    avg_items: float = 0.0
+    avg_tokens: float = 0.0
+    p95_ms: float = 0.0
+
+    def summary(self) -> dict[str, float]:
+        return {k: round(v, 3) for k, v in self.__dict__.items()}
+
+
+def evaluate_context(
+    *,
+    max_tokens: int = 1500,
+    settings: Optional[Settings] = None,
+    memories: Sequence[PersonaMemory] = MEMORIES,
+    queries: Sequence[PersonaQuery] = QUERIES,
+) -> ContextEvaluation:
+    """Measure the compiled context (profile + task-relevant layers), not
+    just the ranked list: this is what the assistant actually receives."""
+    from mnemosyne.container import Mnemosyne
+    from mnemosyne.services.context_service import ContextRequest
+
+    base = settings or Settings(database_url="sqlite:///:memory:", app_env="testing", log_level="WARNING")
+    label_scope = {m.label: m.scope for m in memories}
+    essential, relevant, noise, items, tokens, latencies = [], [], [], [], [], []
+    leaks = 0
+    with Mnemosyne(base, schema="create") as container:
+        labels = seed(container, memories)
+        container.retrieval.load_index()
+        for query in queries:
+            context = WorkingContext.create(repo_id=query.repo, languages=list(query.languages))
+            pack = container.context.compile(
+                ContextRequest(task=query.text, context=context, max_tokens=max_tokens, record_access=False)
+            )
+            included = {labels[item.memory.id] for item in pack.items}
+            must = {label for label, grade in query.relevant.items() if grade >= 3}
+            want = {label for label, grade in query.relevant.items() if grade >= 2}
+            essential.append(len(must & included) / len(must) if must else 1.0)
+            relevant.append(len(want & included) / len(want) if want else 1.0)
+            haystack = {label for label in included if label.startswith("n_") and label not in query.relevant}
+            noise.append(len(haystack) / max(1, len(included)))
+            if query.repo and any(
+                label_scope[label].startswith("repo:") and label_scope[label] != f"repo:{query.repo}"
+                for label in included
+            ):
+                leaks += 1
+            items.append(len(pack.items))
+            tokens.append(pack.estimated_tokens)
+            latencies.append(pack.took_ms)
+    return ContextEvaluation(
+        max_tokens=max_tokens,
+        coverage_essential=statistics.fmean(essential),
+        coverage_relevant=statistics.fmean(relevant),
+        noise_rate=statistics.fmean(noise),
+        leakage=leaks / max(1, len(queries)),
+        avg_items=statistics.fmean(items),
+        avg_tokens=statistics.fmean(tokens),
+        p95_ms=_percentile(latencies, 95),
+    )
