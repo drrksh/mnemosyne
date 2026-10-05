@@ -565,8 +565,8 @@ the server. Use `MNEMOSYNE_CONFIG_FILE=.env`.
   and wrapped in `<mnemosyne-context>` so it is never re-learned.
 
 **Why:** a memory tool that breaks or slows the editor gets uninstalled.
-`SessionEnd` hooks run while Claude Code is shutting down, so they must
-return at once.
+`SessionEnd` hooks share a 1.5-second budget (raised to a longer per-hook
+timeout, up to 60 seconds) while Claude Code exits.
 
 ### 27. A per-user hook daemon on a Unix socket
 

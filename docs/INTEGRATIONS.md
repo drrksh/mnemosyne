@@ -33,7 +33,7 @@ cannot parse.
 
 | Event | Mnemosyne | Output |
 |---|---|---|
-| `SessionStart` (startup, resume, clear, compact) | Compiles the developer's profile for the current repository: rules, preferences, conventions, tooling, how to run things. | `additionalContext`, up to 1,800 tokens / 9,000 characters |
+| `SessionStart` (startup, resume, clear, compact, fork) | Compiles the developer's profile for the current repository: rules, preferences, conventions, tooling, how to run things. | `additionalContext`, up to 1,800 tokens / 9,000 characters |
 | `UserPromptSubmit` | 1. Learns from the prompt immediately ("no, use pnpm instead of npm") and says so. 2. Adds memories relevant to *this* prompt, only if there are any. | `additionalContext`, or nothing |
 | `PreCompact`, `SessionEnd` | Starts a detached background process that learns from the whole transcript (user turns only), so the hook returns at once. | nothing |
 

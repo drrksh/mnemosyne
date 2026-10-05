@@ -26,16 +26,22 @@ from typing import Any, Iterable, Optional
 CONTEXT_TAG = "mnemosyne-context"
 _STRIP_BLOCKS = re.compile(
     r"<(?P<tag>mnemosyne-context|system-reminder|command-message|command-name|command-args|local-command-stdout|"
-    r"local-command-stderr|user-prompt-submit-hook|bash-stdout|bash-stderr)\b[^>]*>[\s\S]*?</(?P=tag)>",
+    r"local-command-stderr|user-prompt-submit-hook|bash-stdout|bash-stderr|task-notification)\b[^>]*>[\s\S]*?"
+    r"</(?P=tag)>",
     re.IGNORECASE,
 )
 _UNCLOSED_CONTEXT = re.compile(r"<mnemosyne-context\b[^>]*>[\s\S]*$", re.IGNORECASE)
+#: Turns that are in the user's slot but were not typed by the developer:
+#: tool/command echoes, interruptions, resumed-session summaries, and turns
+#: Claude Code starts on its own (background task notifications).
 _NOISE_PREFIXES = (
     "Caveat: The messages below were generated",
     "[Request interrupted",
     "This session is being continued from a previous conversation",
     "<command-",
     "<local-command",
+    "<task-notification",
+    "[SYSTEM NOTIFICATION",
 )
 _PLAIN_ROLE = re.compile(r"^(?P<role>user|human|me|assistant|ai|claude|bot)\s*:\s*", re.IGNORECASE)
 
@@ -58,6 +64,12 @@ class Transcript:
     @property
     def user_turns(self) -> list[Turn]:
         return [t for t in self.turns if t.role == "user"]
+
+
+def is_developer_text(text: str) -> bool:
+    """Whether a user-slot message was typed by the developer (as opposed
+    to a command echo, an interruption marker, or an automatic turn)."""
+    return _usable(text)
 
 
 def clean_user_text(text: str) -> str:

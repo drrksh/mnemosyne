@@ -11,7 +11,8 @@ their own context:
   only when there are any.
 * **PreCompact / SessionEnd** — learn from the whole transcript in a
   *detached* background process, so the hook returns immediately
-  (SessionEnd runs while Claude Code is shutting down).
+  (SessionEnd hooks share a 1.5-second budget, raised to the configured
+  per-hook timeout, up to 60 seconds).
 
 Hook handlers never fail the developer's session: any error is logged to
 `<home>/logs/hooks.log` and the hook exits 0 with no output. Injected
@@ -43,7 +44,7 @@ HookName = Literal["session-start", "user-prompt", "pre-compact", "session-end"]
 
 #: Claude Code event -> (our hook name, matcher, timeout seconds)
 HOOK_EVENTS: dict[str, tuple[HookName, Optional[str], int]] = {
-    "SessionStart": ("session-start", "startup|resume|clear|compact", 15),
+    "SessionStart": ("session-start", "startup|resume|clear|compact|fork", 15),
     "UserPromptSubmit": ("user-prompt", None, 10),
     "PreCompact": ("pre-compact", None, 10),
     "SessionEnd": ("session-end", None, 5),
@@ -99,10 +100,11 @@ def handle_session_start(payload: dict[str, Any], backend: Backend, settings: Se
 
 def handle_user_prompt(payload: dict[str, Any], backend: Backend, settings: Settings) -> HookOutput:
     from mnemosyne.learning.conversation.heuristics import ConversationExtractor
-    from mnemosyne.learning.conversation.transcript import clean_user_text
+    from mnemosyne.learning.conversation.transcript import clean_user_text, is_developer_text
     from mnemosyne.learning.workspace import detect_working_context
 
-    prompt = clean_user_text(str(payload.get("prompt") or ""))
+    raw_prompt = str(payload.get("prompt") or "")
+    prompt = clean_user_text(raw_prompt)
     if not prompt.strip():
         return HookOutput()
     cwd = payload.get("cwd") or os.getcwd()
@@ -110,8 +112,10 @@ def handle_user_prompt(payload: dict[str, Any], backend: Backend, settings: Sett
     parts: list[str] = []
     detail: dict[str, Any] = {}
 
-    candidates = ConversationExtractor().extract_text(prompt, session_id=session,
-                                                      context=detect_working_context(cwd))
+    # UserPromptSubmit also fires for turns Claude Code starts on its own;
+    # only what the developer typed may become a memory.
+    candidates = ConversationExtractor().extract_text(prompt, session_id=session, context=detect_working_context(cwd)
+                                                      ) if is_developer_text(raw_prompt) else []
     if candidates:
         report = backend.ingest(candidates, source="hook:user-prompt")
         learned = [o["title"] for o in report.learned]

@@ -236,7 +236,7 @@ also go in `~/.mnemosyne/config.env`, or in a file named by
 
 ```bash
 pip install -e ".[dev]"
-make check            # ruff + mypy + the test suite (408 tests; 3 run only with PostgreSQL)
+make check            # ruff + mypy + the test suite (411 tests; 3 run only with PostgreSQL)
 make test-postgres    # also against PostgreSQL (needs MNEMOSYNE_TEST_POSTGRES_URL)
 make eval bench       # retrieval quality and performance
 ```
