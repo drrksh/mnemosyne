@@ -31,6 +31,7 @@ from mnemosyne.retrieval.ranker import HybridRanker, RankingWeights
 from mnemosyne.services.context_service import ContextService
 from mnemosyne.services.identity_service import IdentityService
 from mnemosyne.services.learning_service import LearningService, LearningSettings
+from mnemosyne.services.portability_service import PortabilityService
 from mnemosyne.services.memory_service import MemoryService
 from mnemosyne.services.retrieval_service import RetrievalService
 
@@ -113,6 +114,9 @@ class Mnemosyne:
                 max_commits=self.settings.git_max_commits,
             ),
             llm_extractor_factory=self._build_llm_extractor,
+        )
+        self.portability = PortabilityService(
+            self.uow_factory, self.learning, default_principal=self.default_principal
         )
 
     # ------------------------------------------------------------------

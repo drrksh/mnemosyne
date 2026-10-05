@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     #: filesystem; it is only ever allowed in local mode unless enabled here.
     allow_server_side_repo_analysis: bool = False
     cors_origins: list[str] = Field(default_factory=list)
+    #: Requests per minute per authenticated principal (api_key mode); 0 disables.
+    rate_limit_per_minute: int = 600
+    #: Upper bound on request bodies (transcripts can be large; this is a guard, not a quota).
+    max_request_bytes: int = 10 * 1024 * 1024
+    #: Serve /metrics without authentication in api_key mode (e.g. behind a private network).
+    metrics_public: bool = False
+
+    # --- Client mode ------------------------------------------------------
+    #: When set, the CLI, MCP server and editor hooks use this Mnemosyne
+    #: server (team deployment) instead of the local database.
+    server_url: Optional[str] = None
+    server_api_key: Optional[SecretStr] = None
 
     # --- Memory validation limits ----------------------------------------
     max_title_length: int = 500

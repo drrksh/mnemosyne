@@ -58,6 +58,9 @@ def get_principal(request: Request, container: Mnemosyne = Depends(get_container
         if not token:
             raise AuthenticationError("missing API key: send 'Authorization: Bearer <key>'")
         principal = container.identity.authenticate(token)
+        limiter = getattr(request.app.state, "rate_limiter", None)
+        if limiter is not None:
+            limiter.check(principal.user_id)
     request.state.principal = principal
     return principal
 

@@ -24,6 +24,7 @@ from mnemosyne.domain.exceptions import (
     RepositoryError,
     ValidationError,
 )
+from mnemosyne.api.observability import RateLimitedError
 from mnemosyne.logging_config import get_request_id
 
 logger = logging.getLogger("mnemosyne.api.errors")
@@ -60,6 +61,15 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def handle_pydantic_validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         return _error_response(422, "validation_error", str(exc.errors()))
+
+    @app.exception_handler(RateLimitedError)
+    async def handle_rate_limited(request: Request, exc: RateLimitedError) -> JSONResponse:
+        metrics = getattr(request.app.state, "metrics", None)
+        if metrics is not None:
+            metrics.rate_limited += 1
+        response = _error_response(429, "rate_limited", exc.message)
+        response.headers["Retry-After"] = str(max(1, int(exc.retry_after + 0.999)))
+        return response
 
     @app.exception_handler(MnemosyneError)
     async def handle_domain_error(request: Request, exc: MnemosyneError) -> JSONResponse:
