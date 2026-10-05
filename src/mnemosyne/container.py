@@ -15,18 +15,21 @@ from typing import Literal, Optional
 from sqlalchemy import Engine
 
 from mnemosyne.config import Settings, get_settings
+from mnemosyne.core.consolidation import ConsolidationPolicy, Consolidator
 from mnemosyne.core.memory_engine import EngineLimits, MemoryEngine
 from mnemosyne.db import migrate
 from mnemosyne.db.base import Base
 from mnemosyne.db.session import create_engine_from_settings, create_session_factory, is_in_memory_sqlite
 from mnemosyne.db.unit_of_work import UnitOfWork
 from mnemosyne.domain.principal import Permission, Principal
+from mnemosyne.learning.repo.analyzer import AnalysisOptions
 from mnemosyne.repositories.sqlite import orm_models  # noqa: F401  (registers models on Base.metadata)
 from mnemosyne.retrieval.embeddings import Embedder, build_embedder
 from mnemosyne.retrieval.index import DiskIndexCache, IndexCache
 from mnemosyne.retrieval.indexer import MemoryIndexer
 from mnemosyne.retrieval.ranker import HybridRanker, RankingWeights
 from mnemosyne.services.identity_service import IdentityService
+from mnemosyne.services.learning_service import LearningService, LearningSettings
 from mnemosyne.services.memory_service import MemoryService
 from mnemosyne.services.retrieval_service import RetrievalService
 
@@ -81,6 +84,30 @@ class Mnemosyne:
             default_principal=self.default_principal,
             disk_cache=disk_cache,
         )
+        self.learning = LearningService(
+            self.uow_factory,
+            self.memory_engine,
+            self.indexer,
+            self.retrieval,
+            consolidator=Consolidator(
+                ConsolidationPolicy(near_duplicate_threshold=self.settings.near_duplicate_threshold)
+            ),
+            settings=LearningSettings(
+                min_confidence=self.settings.learning_min_confidence,
+                evidence_cap=self.settings.evidence_cap_per_memory,
+                generalize_min_repos=self.settings.generalize_min_repos,
+                generalize_min_agreement=self.settings.generalize_min_agreement,
+                generalize_min_author_share=self.settings.generalize_min_author_share,
+            ),
+            default_principal=self.default_principal,
+            analysis_options=AnalysisOptions(
+                max_files=self.settings.repo_max_files,
+                max_file_bytes=self.settings.repo_max_file_bytes,
+                max_files_per_language=self.settings.repo_max_files_per_language,
+                max_commits=self.settings.git_max_commits,
+            ),
+            llm_extractor_factory=self._build_llm_extractor,
+        )
 
     # ------------------------------------------------------------------
     def uow_factory(self) -> UnitOfWork:
@@ -91,6 +118,20 @@ class Mnemosyne:
         row exists (single-user mode bootstraps itself)."""
         self.identity.ensure_user(self.settings.local_user_id, is_admin=True)
         return self.identity.principal_for(self.settings.local_user_id, Permission.ALL)
+
+    def _build_llm_extractor(self) -> object:
+        from mnemosyne.learning.conversation.llm import LlmConversationExtractor, LlmExtractorConfig, build_client
+
+        return LlmConversationExtractor(
+            build_client(self.settings),
+            LlmExtractorConfig(
+                model=self.settings.llm_model,
+                effort=self.settings.llm_effort,
+                max_transcript_chars=self.settings.llm_max_transcript_chars,
+                timeout_seconds=self.settings.llm_timeout_seconds,
+                fallbacks=None if self.settings.llm_fallbacks == "none" else self.settings.llm_fallbacks,
+            ),
+        )
 
     def _prepare_schema(self, mode: SchemaMode) -> None:
         if mode == "migrate":

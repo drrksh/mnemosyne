@@ -129,8 +129,14 @@ class Settings(BaseSettings):
 
     # --- Optional LLM extraction -----------------------------------------
     llm_extraction: bool = False
+    #: Optional explicit key; otherwise the Anthropic SDK resolves
+    #: credentials itself (ANTHROPIC_API_KEY, `ant auth login` profile...).
     anthropic_api_key: Optional[SecretStr] = None
-    llm_model: str = "claude-haiku-4-5"
+    llm_model: str = "claude-opus-5-5"
+    llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    #: Server-side refusal fallback: "default" lets the API route a declined
+    #: request to an appropriate model; "none" disables it.
+    llm_fallbacks: Literal["default", "none"] = "default"
     llm_timeout_seconds: float = 60.0
     llm_max_transcript_chars: int = 60_000
 

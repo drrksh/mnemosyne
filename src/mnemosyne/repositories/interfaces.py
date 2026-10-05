@@ -66,6 +66,14 @@ class MemoryRepository(ABC):
         against `expected_version`. Raises NotFoundError / ConflictError."""
 
     @abstractmethod
+    def update_dynamics(self, memory_id: UUID, changes: FieldChanges) -> Memory:
+        """Update belief-strength fields only (confidence, importance,
+        reinforcement count, last reinforced). These record how strongly a
+        memory is held, not what it says, so — like access tracking — they
+        do not create a new content version. Evidence rows document every
+        change. Rejects any other field."""
+
+    @abstractmethod
     def record_access(self, memory_id: UUID) -> Memory:
         """Increment access_count and update last_accessed_at, returning
         the updated memory. Access tracking is *not* a content change: it

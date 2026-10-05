@@ -48,6 +48,9 @@ _SORTABLE_FIELDS = {
 #: Domain field name -> ORM attribute name, where they differ.
 _FIELD_TO_COLUMN = {"key": "slot_key", "value": "slot_value", "metadata": "extra_metadata"}
 
+#: Fields `update_dynamics` may change: belief strength, not content.
+DYNAMICS_FIELDS = frozenset({"confidence_score", "importance_score", "reinforcement_count", "last_reinforced_at"})
+
 #: Large IN-lists are chunked to stay under SQLite's bound-parameter limit.
 _IN_CHUNK = 500
 
@@ -159,6 +162,26 @@ class SqliteMemoryRepository(MemoryRepository):
         except SQLAlchemyError as exc:
             raise RepositoryError("Failed to update memory") from exc
 
+        return memory_to_domain(orm)
+
+    # ------------------------------------------------------------------
+    def update_dynamics(self, memory_id: UUID, changes: FieldChanges) -> Memory:
+        unknown = set(changes) - DYNAMICS_FIELDS
+        if unknown:
+            raise ValidationError(f"not belief-dynamics fields: {sorted(unknown)}")
+        try:
+            result = self._session.execute(
+                update(MemoryORM)
+                .where(MemoryORM.id == str(memory_id))
+                .values(**changes, updated_at=utcnow())
+                .execution_options(synchronize_session=False)
+            )
+        except SQLAlchemyError as exc:
+            raise RepositoryError("Failed to update memory dynamics") from exc
+        if result.rowcount == 0:
+            raise NotFoundError(f"Memory {memory_id} not found")
+        orm = self._session.get(MemoryORM, str(memory_id), populate_existing=True)
+        assert orm is not None
         return memory_to_domain(orm)
 
     # ------------------------------------------------------------------
