@@ -40,3 +40,11 @@ class RepositoryError(MnemosyneError):
 
 class ConfigurationError(MnemosyneError):
     """The application is misconfigured."""
+
+
+class AuthenticationError(MnemosyneError):
+    """No valid credential was presented."""
+
+
+class PermissionDeniedError(MnemosyneError):
+    """The caller is authenticated but not allowed to perform this operation."""

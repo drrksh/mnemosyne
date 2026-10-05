@@ -1,127 +1,256 @@
-# Mnemosyne — Phase 1: Local Memory Engine
+# Mnemosyne
 
-Mnemosyne is a **Memory Operating System** that sits between an LLM and
-long-term storage, letting an AI accumulate structured experience across
-years instead of restarting from zero every conversation.
+**An engineering memory for AI coding assistants.** Mnemosyne learns how
+a developer builds software: their conventions, tools, decisions, and the
+lessons that cost them an outage. Before any assistant writes a line, it
+gives that assistant a short, relevant briefing. The developer never has
+to re-explain themselves, and every assistant they use (Claude Code,
+Cursor, Copilot, Gemini, anything that speaks MCP) gets the same picture.
 
-**This is not a chatbot. This is not RAG. This is not an LLM wrapper.**
-The LLM is a reasoning engine that sits *on top of* this system — this
-repository contains none of that. It contains the foundation everything
-else will be built on: a durable, versioned, queryable store for
-structured memories.
+```
+$ mnemosyne context "add an endpoint to refund a payment"
 
-## What Phase 1 is
+## Developer memory (Mnemosyne)
+Working in repository `github.com/acme/payments-api` — python.
 
-Phase 1 builds exactly one thing: the **Local Memory Engine** — a
-production-grade CRUD + versioning + search system for structured
-memories, backed by SQLite today and portable to PostgreSQL (or a
-distributed store) later without touching business logic.
+### Relevant to this task
+- Idempotency keys on POST endpoints — Every POST endpoint accepts an Idempotency-Key header
+  stored for 24 hours so client retries are safe; decided after the double-charge incident.
+- Flaky refund concurrency test — fixed by wrapping each test in a transaction that is rolled back.
+- Authorization with JWT scopes — endpoints check permissions with require_scope('payments:admin').
 
-Explicitly **not** in this phase — see [ROADMAP.md](ROADMAP.md) for
-where each of these will attach:
+### Rules
+- Money as integer minor units
+- Never hardcode secrets
 
-- No embeddings, no vector search
-- No LLM integration of any kind
-- No context compilation
-- No UI
+### Conventions
+- Async HTTP with httpx
+- Factory fixtures for test data
+- Table-driven tests with parametrize
+...
+```
+
+That briefing came from 101 memories across four repositories, in a few
+milliseconds once the index is warm. Nothing from the other three
+repositories leaked in, and the task-relevant lessons came first.
+
+---
+
+## How it works
+
+```
+   learn                         remember                        deliver
+   ─────                         ────────                        ───────
+   your repositories ──┐                                    ┌──► Claude Code hooks (automatic)
+   (code, config, git) │     ┌──────────────────────────┐   ├──► MCP tools (Cursor, Claude, …)
+   your AI sessions ───┼───► │ memories with evidence,  │ ──┼──► CLAUDE.md / AGENTS.md / Copilot /
+   what you tell it ───┤     │ scope, confidence, slots │   │    Cursor / Gemini rule files
+   your feedback ──────┘     └──────────────────────────┘   └──► REST API, CLI
+```
+
+**Learning.** Mnemosyne learns from four sources.
+
+- **Repository analysis.** Language-aware analyzers for Python,
+  TypeScript/JavaScript and Go read code style, typing, testing patterns,
+  error handling and logging. They also read manifests and configuration
+  (package managers, frameworks, linters, CI, how to run things) and the
+  developer's *own* commits (message style, branch names). Every finding
+  carries a confidence (a Wilson lower bound over the samples seen) and
+  evidence pointing at the commit it came from.
+- **Conversations.** As you work, each prompt is checked for lasting
+  statements ("no, use pnpm instead of npm", "never mock the database
+  here"). Whole session transcripts are mined when a session compacts or
+  ends. This is precision-first: "use pnpm for this task" is not stored.
+  An optional LLM extractor (Claude) catches subtler preferences and must
+  quote the user verbatim, or its finding is discarded.
+- **Explicit statements.** `mnemosyne remember "…"`, or an assistant
+  calling the `remember` tool.
+- **Feedback.** Mark a memory helpful, wrong or outdated, or confirm it.
+  Confirming makes an inferred memory authoritative.
+
+**Consolidation.** Incoming knowledge is merged, not appended.
+
+- **Repeats.** Seeing the same thing again reinforces it.
+- **Slots.** "Python formatter", "JS package manager" and similar settings
+  hold one value per scope. A newer statement supersedes the old one and
+  keeps the history.
+- **Authority.** What you said beats what was inferred:
+  explicit > conversation > imported > inferred.
+- **Contradictions** are resolved by authority. An inference that
+  contradicts something you said is kept as counter-evidence but never
+  overrides it.
+- **Generalization.** A convention you follow across several of your own
+  repositories becomes a general preference.
+
+**Delivery.** Scope decides what applies. A memory is global, language
+scoped (`lang:python`), or repository scoped (`repo:github.com/acme/api`).
+The most specific applicable memory wins, and personal beats team for the
+same slot. Retrieval is hybrid: BM25F over memory fields, embeddings, and
+a developer-concept layer that knows "write tests" relates to testing
+conventions. It's combined with importance, confidence, recency, scope
+and reinforcement, explains every score, and is deterministic. The
+context compiler packs a token budget with the task-relevant layer first
+and the always-on profile (rules, conventions, tooling) second.
 
 ## Quickstart
 
-```bash
-# 1. Install (creates an editable install with dev dependencies)
-make dev-install
-
-# 2. Apply database migrations (creates ./mnemosyne.db)
-make migrate
-
-# 3. Run the API
-make run
-# -> http://localhost:8420/docs for interactive OpenAPI documentation
-```
-
-Configuration is entirely environment-driven — copy `.env.example` to
-`.env` and adjust as needed. Every setting has a sensible default; see
-[`src/mnemosyne/config.py`](src/mnemosyne/config.py) for the full list.
-
-## Running the tests
+Requires Python 3.11+.
 
 ```bash
-make test        # 114 tests: unit, integration, API, and failure-mode
-make test-cov     # same, with a coverage report (95% at last count)
-make typecheck    # mypy, strict on the parts that matter
+pip install .                        # from a checkout (PyPI release pending); add [postgres] / [llm] as needed
+
+mnemosyne init                      # creates ~/.mnemosyne (owner-only permissions)
+mnemosyne learn repo ~/code/api     # learn a repository you work on (repeat for others)
+mnemosyne learn sessions            # learn from your past Claude Code sessions
+mnemosyne install claude-code       # from now on, every Claude Code session is briefed automatically
+mnemosyne doctor                    # check everything is wired up
 ```
 
-The suite is organized by what it needs to prove:
+Try it without touching anything: `mnemosyne demo` briefs an assistant on
+three tasks for a sample developer, in memory.
 
-| Directory              | What it verifies                                                        | DB involved?          |
-|-------------------------|---------------------------------------------------------------------------|------------------------|
-| `tests/unit/`            | MemoryEngine business rules — validation, versioning logic, status rules | No                     |
-| `tests/integration/`     | Repository CRUD/search, service-layer transactions, real Alembic migrations | Yes (in-memory / temp file) |
-| `tests/api/`             | Full HTTP request → response round-trips                                  | Yes (in-memory)        |
-| `tests/failure/`         | Graceful degradation — malformed input, conflicts, unexpected errors      | Yes (in-memory)        |
+## Integrations
 
-## Project layout
+| Tool | How | What it does |
+|---|---|---|
+| **Claude Code** | `mnemosyne install claude-code` (hooks + MCP) | Profile at session start; relevant memories with each prompt; learns from each prompt live and from the transcript at compaction/end. |
+| **Cursor, Windsurf, Claude Desktop, any MCP client** | `mnemosyne install cursor`, or run `mnemosyne mcp` (stdio) | Tools: `get_context`, `recall`, `remember`, `feedback`, `forget`, `profile`, `learn_repository`. |
+| **Copilot, Gemini, Codex, Cursor rules, humans** | `mnemosyne sync [--all]` | Writes a marked block into `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, `GEMINI.md`, and `.cursor/rules/mnemosyne.mdc`. Only repository and team knowledge by default, so it is safe to commit. |
+| **Anything else** | REST API (`mnemosyne serve`, OpenAPI at `/docs`) | `POST /api/v1/context`, `/recall`, `/learn/*`, memories CRUD, export, and more. |
 
+Hooks never break a session: failures are logged to
+`~/.mnemosyne/logs/hooks.log` and the hook exits cleanly. Injected context
+is capped below Claude Code's 10,000-character limit and wrapped in
+`<mnemosyne-context>`, so it is never learned back from transcripts.
+After the first hook of a session, a small background daemon answers
+hooks in **~100 ms** instead of ~730 ms. See
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+
+## Teams and companies
+
+One developer's memory lives in a local SQLite database. A team runs a
+Mnemosyne server (PostgreSQL, API keys) and points developer machines at
+it:
+
+```bash
+POSTGRES_PASSWORD=$(openssl rand -hex 16) docker compose up -d
+docker compose exec api mnemosyne admin user create alice --admin    # prints an API key, once
+docker compose exec api mnemosyne admin team create payments
+docker compose exec api mnemosyne admin team add payments alice --role maintainer
 ```
-src/mnemosyne/
-├── domain/          Pure entities, enums, exceptions, DTOs — no framework code
-├── core/             MemoryEngine: business rules, zero I/O
-├── repositories/      MemoryRepository port + SQLite adapter
-│   └── sqlite/         ORM models, ORM↔domain mappers, the repository itself
-├── db/               Engine/session construction, Unit of Work
-├── services/          MemoryService: transaction-per-use-case orchestration
-├── api/               FastAPI app, routers, Pydantic schemas, error mapping
-├── config.py          Centralized Settings (env-var driven)
-├── logging_config.py  Structured JSON logging
-└── main.py            Local dev entrypoint
 
-migrations/           Alembic migration environment + versions
-tests/                 See table above
+```bash
+# on each developer machine, in ~/.mnemosyne/config.env
+MNEMOSYNE_SERVER_URL=https://mnemosyne.internal.example.com
+MNEMOSYNE_SERVER_API_KEY=mn_…
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how the layers fit together
-and why, [DECISIONS.md](DECISIONS.md) for the reasoning behind specific
-choices, and [ROADMAP.md](ROADMAP.md) for what comes after Phase 1.
+Every CLI command, hook and MCP tool then works against the server.
+Repositories are still analysed on the developer's machine, and
+transcripts are redacted there before anything is sent.
 
-## API overview
+The server also provides:
 
-Full interactive documentation is auto-generated at `/docs` once the
-server is running. Summary:
+- **Tenancy.** Personal memories are private. Team memories are shared
+  with members; members contribute, and maintainers can also delete
+  permanently. Anything you can't see reads as 404.
+- **Access control.** Scoped, expiring, revocable API keys, stored as
+  SHA-256 hashes.
+- **Audit log** of every change.
+- **Data rights.** Export, import and right-to-erasure endpoints.
+- **Operations.** Per-key rate limits, request size limits, Prometheus
+  `/metrics`, `/health` and `/ready` (schema revision).
 
-| Method & Path                                  | Purpose                                    |
-|--------------------------------------------------|-----------------------------------------------|
-| `POST /api/v1/memories`                            | Create a memory                                |
-| `POST /api/v1/memories/batch`                       | Create many memories atomically                 |
-| `GET /api/v1/memories`                              | Search/list (keyword, tag, type, date range, confidence/importance range, sort, pagination) |
-| `GET /api/v1/memories/{id}`                          | Fetch one (tracks access count)                 |
-| `PATCH /api/v1/memories/{id}`                        | Partial update (optionally with optimistic-concurrency `expected_version`) |
-| `PATCH /api/v1/memories/batch`                       | Bulk update atomically                           |
-| `POST /api/v1/memories/{id}/archive`                  | Archive                                         |
-| `POST /api/v1/memories/{id}/restore`                  | Restore from archived or soft-deleted            |
-| `DELETE /api/v1/memories/{id}`                        | Soft delete (`?permanent=true` for hard delete)   |
-| `GET /api/v1/memories/{id}/versions`                  | List historical (superseded) versions            |
-| `GET /api/v1/memories/{id}/versions/{version_number}` | Fetch a specific historical (or current) version |
-| `GET /health`                                        | Liveness + DB connectivity check                 |
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-## How versioning works, briefly
+## Privacy and security
 
-Every update snapshots the memory's *pre-update* state into an
-append-only `memory_versions` table before applying the change — the
-live `memories` row is never overwritten without a trace. Concurrent
-writes are protected two ways: SQLAlchemy's built-in optimistic
-concurrency (`version_id_col`) as a safety net for any write, plus an
-explicit client-supplied `expected_version` for "only apply this if
-nothing has changed since I last read it" semantics. See
-[ARCHITECTURE.md](ARCHITECTURE.md#versioning--concurrency) for the full
-model and [DECISIONS.md](DECISIONS.md) for why it's built this way.
+- **Local-first.** By default nothing leaves the machine, and the only
+  network calls are the ones you configure (team server, optional LLM
+  extraction, optional embedding API).
+- **Secrets are redacted before storage.** This covers provider tokens,
+  credential assignments, URL passwords, private keys, and high-entropy
+  strings. A statement that is mostly secret is not stored at all.
+- **Configuration can't be hijacked by a repository.** It's never read
+  from a `.env` in the working directory: hooks run inside whatever
+  repository is open, and a cloned repository must not be able to
+  redirect your memory.
+- **The local server refuses unsafe binds.** It won't bind a network
+  interface without authentication.
+- **The hook daemon's socket is private.** Only the owner can use it, and
+  the client checks ownership before sending a prompt.
 
-## Known, deliberate gaps in test coverage
+Threat model and controls: [SECURITY.md](SECURITY.md).
 
-Coverage sits at 95%. The uncovered ~5% is almost entirely generic
-`except SQLAlchemyError` defensive branches (disk-full, connection-drop
-style infrastructure failures) that would require fault-injection
-mocking to trigger — and `main.py`'s `uvicorn.run()` call, which is a
-thin, untestable launcher. Every *reachable-through-normal-use* failure
-path (duplicate ids, stale versions, not-found, malformed metadata,
-invalid input) has an explicit test. See the "Testing" section of
-[DECISIONS.md](DECISIONS.md) for more.
+## Measured quality
+
+From the labeled evaluation persona (101 memories, 4 repositories, 41
+in-sample + 15 held-out queries written before tuning), with the default
+zero-dependency embedder:
+
+| | Recall@5 | MRR | nDCG@5 | Cross-repo leakage |
+|---|---|---|---|---|
+| In-sample | 0.935 | 0.874 | 0.869 | 0 |
+| Held-out | 0.900 | 0.806 | 0.817 | 0 |
+
+The compiled context (what the assistant actually receives, 1,500-token
+budget) contains **100%** of essential memories in-sample and **93%**
+held-out.
+
+| Performance (this development container) | |
+|---|---|
+| Context compile / recall, 100 memories | p95 ~3 ms |
+| Recall, 10,000 memories | p50 20 ms, p95 25 ms |
+| Claude Code hook, cold process / warm daemon | ~730 ms / ~100 ms (p50) |
+
+Method, ablations and known limits: [docs/EVALUATION.md](docs/EVALUATION.md).
+Reproduce with `mnemosyne eval`, `python benchmarks/scale.py`, and
+`python benchmarks/hook_latency.py`.
+
+## Command reference
+
+| Command | Purpose |
+|---|---|
+| `init`, `status`, `doctor` | Set up, inspect, diagnose |
+| `remember TEXT [--here \| --lang L] [-t TYPE]` | Tell it something directly |
+| `recall QUERY [--explain]` | Search, ranked for the current repository |
+| `context [TASK]`, `profile` | What an assistant would be told |
+| `list`, `show ID`, `forget ID`, `feedback ID SIGNAL` | Inspect and correct (8-character ids are fine) |
+| `learn repo [PATHS…]`, `learn sessions`, `learn session FILE`, `learn text` | Teach it |
+| `sync [--all] [--audience personal]` | Write rule files |
+| `export`, `import` | Portable JSON bundle |
+| `install claude-code \| cursor`, `uninstall claude-code` | Wire up tools (merges settings; keeps a backup) |
+| `serve`, `mcp`, `daemon status \| stop` | Servers |
+| `admin user \| key \| team …`, `db upgrade \| current` | Administration |
+| `demo`, `eval` | Try it; measure it |
+
+## Configuration
+
+All settings are environment variables prefixed `MNEMOSYNE_`. They can
+also go in `~/.mnemosyne/config.env`, or in a file named by
+`MNEMOSYNE_CONFIG_FILE`. The full list, with defaults, is in
+[`src/mnemosyne/config.py`](src/mnemosyne/config.py), and
+[`config.env.example`](config.env.example) covers the common ones.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+make check            # ruff + mypy + the test suite (411 tests; 3 run only with PostgreSQL)
+make test-postgres    # also against PostgreSQL (needs MNEMOSYNE_TEST_POSTGRES_URL)
+make eval bench       # retrieval quality and performance
+```
+
+| Document | |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Layers, data model, retrieval, learning, surfaces |
+| [DECISIONS.md](DECISIONS.md) | Why things are the way they are |
+| [SECURITY.md](SECURITY.md) | Threat model and controls |
+| [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Claude Code, MCP clients, rule files, REST |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Running a team server |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | How quality is measured, and the numbers |
+| [ROADMAP.md](ROADMAP.md) | What's next |
+
+## License
+
+MIT

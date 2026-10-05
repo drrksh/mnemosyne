@@ -9,6 +9,7 @@ PostgreSQL later means changing the connection-args/pragma logic here
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy import Engine, create_engine, event
@@ -26,13 +27,15 @@ def create_engine_from_settings(settings: Settings) -> Engine:
     """Build a SQLAlchemy Engine appropriate for the configured database URL."""
     url = settings.database_url
     is_sqlite = url.startswith("sqlite")
-    is_memory = "memory" in url
+    is_memory = is_sqlite and is_in_memory_sqlite(url)
 
     connect_args: dict[str, object] = {}
     engine_kwargs: dict[str, object] = {"echo": settings.sql_echo, "future": True}
 
     if is_sqlite:
         connect_args["check_same_thread"] = False
+        if not is_memory:
+            sqlite_file_path(url).parent.mkdir(parents=True, exist_ok=True)
         if is_memory:
             # A shared in-memory DB requires every connection in the pool
             # to be the SAME connection, or each new connection sees a
@@ -56,6 +59,16 @@ def create_engine_from_settings(settings: Settings) -> Engine:
             cursor.close()
 
     return engine
+
+
+def is_in_memory_sqlite(url: str) -> bool:
+    return url in ("sqlite://", "sqlite:///") or ":memory:" in url or "mode=memory" in url
+
+
+def sqlite_file_path(url: str) -> Path:
+    """`sqlite:////abs/path.db` -> /abs/path.db; `sqlite:///rel.db` -> rel.db"""
+    raw = url.split("///", 1)[1] if "///" in url else url.split("//", 1)[-1]
+    return Path(raw.split("?", 1)[0])
 
 
 def create_session_factory(engine: Engine) -> sessionmaker:

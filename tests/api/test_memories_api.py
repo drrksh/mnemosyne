@@ -165,4 +165,4 @@ def test_batch_create_and_bulk_update(client):
 
 def test_response_includes_request_id_header(client):
     response = client.get("/health")
-    assert "x-request-id" in {k.lower() for k in response.headers.keys()}
+    assert "x-request-id" in {k.lower() for k in response.headers}

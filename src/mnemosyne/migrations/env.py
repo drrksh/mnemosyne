@@ -18,18 +18,21 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# Ensure src/ is importable regardless of the working directory Alembic
-# is invoked from.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Ensure src/ is importable when running from a source checkout without
+# an installed package (this file lives at src/mnemosyne/migrations/).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mnemosyne.config import get_settings  # noqa: E402
-from mnemosyne.db.base import Base  # noqa: E402
-from mnemosyne.repositories.sqlite import orm_models  # noqa: E402,F401  (registers models on Base.metadata)
+from mnemosyne.config import get_settings
+from mnemosyne.db.base import Base
+from mnemosyne.repositories.sqlite import orm_models  # noqa: F401  (registers models on Base.metadata)
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Only configure logging from an ini file when one is in use (the
+# `alembic` CLI). Programmatic runs via `mnemosyne.db.migrate` must not
+# reconfigure the host application's logging.
+if config.config_file_name is not None and config.attributes.get("configure_logging", True):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
@@ -57,7 +60,16 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations against a live DB connection."""
+    """Run migrations against a live DB connection (or one handed in via
+    `config.attributes["connection"]`, which lets tests and the app's
+    auto-migrate path reuse an existing engine)."""
+    existing = config.attributes.get("connection")
+    if existing is not None:
+        context.configure(connection=existing, target_metadata=target_metadata, render_as_batch=True)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

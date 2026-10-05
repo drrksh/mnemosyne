@@ -18,15 +18,27 @@ from __future__ import annotations
 
 import logging
 from types import TracebackType
-from typing import Callable, Optional, Type
+from typing import Callable, Optional
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from mnemosyne.db.session import SessionFactory
 from mnemosyne.domain.exceptions import RepositoryError
-from mnemosyne.repositories.interfaces import MemoryRepository
+from mnemosyne.repositories.interfaces import (
+    AuditRepository,
+    EmbeddingRepository,
+    EvidenceRepository,
+    IdentityRepository,
+    MemoryRepository,
+)
 from mnemosyne.repositories.sqlite.memory_repository import SqliteMemoryRepository
+from mnemosyne.repositories.sqlite.support_repositories import (
+    SqlAuditRepository,
+    SqlEmbeddingRepository,
+    SqlEvidenceRepository,
+    SqlIdentityRepository,
+)
 
 logger = logging.getLogger("mnemosyne.db.uow")
 
@@ -34,9 +46,17 @@ RepositoryFactory = Callable[[Session], MemoryRepository]
 
 
 class UnitOfWork:
-    """Transactional context manager wrapping one SQLAlchemy session."""
+    """Transactional context manager wrapping one SQLAlchemy session.
+
+    All repositories opened by one UnitOfWork share its session, so a
+    memory, its version snapshot, its evidence, its embedding and the
+    audit event describing the change commit (or roll back) together."""
 
     memories: MemoryRepository
+    evidence: EvidenceRepository
+    embeddings: EmbeddingRepository
+    identity: IdentityRepository
+    audit: AuditRepository
     session: Session
 
     def __init__(
@@ -48,15 +68,19 @@ class UnitOfWork:
         self._repository_factory = repository_factory
         self._committed = False
 
-    def __enter__(self) -> "UnitOfWork":
+    def __enter__(self) -> UnitOfWork:
         self.session = self._session_factory()
         self.memories = self._repository_factory(self.session)
+        self.evidence = SqlEvidenceRepository(self.session)
+        self.embeddings = SqlEmbeddingRepository(self.session)
+        self.identity = SqlIdentityRepository(self.session)
+        self.audit = SqlAuditRepository(self.session)
         self._committed = False
         return self
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
+        exc_type: Optional[type[BaseException]],
         exc: Optional[BaseException],
         tb: Optional[TracebackType],
     ) -> None:

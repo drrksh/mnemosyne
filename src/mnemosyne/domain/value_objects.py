@@ -17,9 +17,9 @@ class _UnsetType:
     which is different from a field explicitly set to None, "", or [].
     """
 
-    _instance: "_UnsetType | None" = None
+    _instance: _UnsetType | None = None
 
-    def __new__(cls) -> "_UnsetType":
+    def __new__(cls) -> _UnsetType:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -57,9 +57,9 @@ class UnitScore:
             raise ValidationError(f"{self.label} must be between 0.0 and 1.0, got {self.value}")
 
     @classmethod
-    def confidence(cls, value: float) -> "UnitScore":
+    def confidence(cls, value: float) -> UnitScore:
         return cls(value=float(value), label="confidence_score")
 
     @classmethod
-    def importance(cls, value: float) -> "UnitScore":
+    def importance(cls, value: float) -> UnitScore:
         return cls(value=float(value), label="importance_score")
