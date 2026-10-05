@@ -1,0 +1,41 @@
+# Mnemosyne with PostgreSQL, for a team.
+#
+#   POSTGRES_PASSWORD=$(openssl rand -hex 16) docker compose up -d
+#   docker compose exec api mnemosyne admin user create alice --admin   # prints an API key
+#
+# Developers then point their machines at it:
+#   MNEMOSYNE_SERVER_URL=http://<host>:8420  MNEMOSYNE_SERVER_API_KEY=<key>
+# (in ~/.mnemosyne/config.env). Put TLS in front of it for anything but a
+# trusted network.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mnemosyne
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: mnemosyne
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mnemosyne -d mnemosyne"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build: .
+    image: mnemosyne:latest
+    environment:
+      MNEMOSYNE_DATABASE_URL: postgresql+psycopg://mnemosyne:${POSTGRES_PASSWORD}@db:5432/mnemosyne
+      MNEMOSYNE_AUTH_MODE: api_key
+      MNEMOSYNE_RATE_LIMIT_PER_MINUTE: ${MNEMOSYNE_RATE_LIMIT_PER_MINUTE:-600}
+    ports:
+      - "${MNEMOSYNE_PORT:-8420}:8420"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

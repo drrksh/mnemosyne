@@ -165,3 +165,35 @@ def test_corrupted_snapshot_is_ignored(tmp_path):
     cache = DiskIndexCache(tmp_path, namespace="x")
     cache._path("k").write_bytes(b"not a pickle")
     assert cache.get("k", IndexSignature(count=0, max_updated_at=None, version_sum=0)) is None
+
+
+def test_equal_scores_order_deterministically(container):
+    """Ties must not be broken by load order or by seconds of recency
+    jitter: the same memory must produce the same context text, both for
+    users and for assistants' prompt caches."""
+    from datetime import timedelta
+
+    from mnemosyne.domain.enums import MemoryType
+    from mnemosyne.utils.time import utcnow
+
+    created = container.memories.create_memories_batch([
+        NewMemoryData(title=f"Convention number {i}", memory_type=MemoryType.CONVENTION, key=f"style.rule_{i}",
+                      value="yes", importance_score=0.6, confidence_score=0.9)
+        for i in range(12)
+    ])
+    index = container.retrieval.load_index()
+    ranker = container.ranker
+    now = utcnow()
+    orders = [
+        [s.memory.id for s in ranker.rank(index, query=None, query_vector=None, context=WorkingContext(),
+                                          now=now + timedelta(seconds=offset), require_relevance=False)]
+        for offset in (0, 7, 45)
+    ]
+    assert orders[0] == orders[1] == orders[2]
+    assert orders[0] == sorted((m.id for m in created), key=str)  # exact ties fall back to id order
+
+    reversed_index = type(index).build(model_id=index.model_id, memories=list(reversed(index.memories)),
+                                       vectors=index.vectors[::-1].copy(), has_vector=index.has_vector[::-1].copy())
+    again = [s.memory.id for s in ranker.rank(reversed_index, query=None, query_vector=None,
+                                              context=WorkingContext(), now=now, require_relevance=False)]
+    assert again == orders[0]

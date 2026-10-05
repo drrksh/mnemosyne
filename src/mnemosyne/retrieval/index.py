@@ -61,6 +61,19 @@ class RetrievalIndex:
     def size(self) -> int:
         return len(self.memories)
 
+    @property
+    def id_rank(self) -> np.ndarray:
+        """Each memory's rank by id: a tie-break that does not depend on the
+        order rows happened to be loaded in, so equal scores order the same
+        way in every process."""
+        cached = self.__dict__.get("_id_rank")
+        if cached is None or len(cached) != self.size:
+            ids = [str(m.id) for m in self.memories]
+            cached = np.empty(self.size, dtype=np.int64)
+            cached[sorted(range(self.size), key=ids.__getitem__)] = np.arange(self.size)
+            self.__dict__["_id_rank"] = cached
+        return cached
+
     def lexical_scores(self, query: str) -> np.ndarray:
         scores = np.zeros(self.size, dtype=np.float32)
         for doc_id, value in self.bm25.score(query_terms(query)).items():

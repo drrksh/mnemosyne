@@ -182,7 +182,7 @@ class ContextService:
 
             profile = ranker.rank(index, query=None, query_vector=None, context=context, now=now,
                                   include=profile_filter, require_relevance=False)
-            profile.sort(key=lambda s: (not s.memory.pinned, -s.score))
+            profile.sort(key=lambda s: not s.memory.pinned)  # stable: keeps the ranker's deterministic order
 
         relevant_ids = {s.memory.id for s in relevant}
         combined = relevant + [s for s in profile if s.memory.id not in relevant_ids]

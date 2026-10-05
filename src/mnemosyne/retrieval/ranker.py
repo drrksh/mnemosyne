@@ -148,7 +148,10 @@ class HybridRanker:
 
         importance = np.fromiter((m.importance_score for m in index.memories), dtype=np.float32, count=n)
         confidence = np.fromiter((m.confidence_score for m in index.memories), dtype=np.float32, count=n)
-        recency = self._recency(index, now)
+        # Recency is a day-scale signal; sub-0.001 jitter (seconds between two
+        # calls) must not reorder results. Same inputs, same order, same
+        # text: which also keeps assistants' prompt caches warm.
+        recency = np.round(self._recency(index, now), 3)
         reinforcement = np.fromiter(
             (_reinforcement_signal(m.reinforcement_count) for m in index.memories), dtype=np.float32, count=n
         )
@@ -166,7 +169,7 @@ class HybridRanker:
         ) / (total_weight or 1.0)
 
         candidates = np.flatnonzero(eligible)
-        order = candidates[np.argsort(-total[candidates], kind="stable")]
+        order = candidates[np.lexsort((index.id_rank[candidates], -np.round(total[candidates], 6)))]
         if limit is not None:
             order = order[:limit]
         return [
