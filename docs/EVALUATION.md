@@ -8,7 +8,7 @@ where they come from.
 ## Method
 
 **Corpus.** `src/mnemosyne/evaluation/persona.py` defines "Sam", a senior
-backend engineer, through 98 memories: global preferences and rules,
+backend engineer, through 101 memories: global preferences and rules,
 Python / TypeScript / Go conventions, four repositories (a FastAPI
 payments service, a Next.js dashboard, a Go CLI, and a legacy Python 3.8
 service whose conventions *contradict* Sam's usual ones), decisions,
@@ -79,13 +79,16 @@ held-out number is the one to quote.
 
 | Variant | Recall@5 | MRR | nDCG@5 |
 |---|---|---|---|
-| hybrid (default) | 0.93 | 0.87 | 0.87 |
-| lexical-only | 0.92 | 0.84 | 0.85 |
-| semantic-only (hashing embedder) | 0.92 | 0.82 | 0.83 |
-| relevance-only (no importance/scope/recency priors) | 0.89 | 0.78 | 0.80 |
+| hybrid (default) | 0.935 | 0.874 | 0.869 |
+| lexical-only | 0.915 | 0.877 | 0.863 |
+| semantic-only (hashing embedder) | 0.935 | 0.850 | 0.850 |
+| relevance-only (no importance/scope/recency priors) | 0.900 | 0.815 | 0.819 |
 
 The priors (importance, confidence, scope affinity, recency,
-reinforcement) are worth about 0.07 nDCG. Scope *exclusion* — not
+reinforcement) are worth about 0.05 nDCG. With the hashing embedder,
+fusing lexical and semantic signals adds little over lexical alone —
+expected, since both are lexical at heart; the fusion is there so a
+neural embedder can contribute when configured. Scope *exclusion* — not
 ranking — is what keeps leakage at zero.
 
 ### Known limits
